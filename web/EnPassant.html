@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>En Passant</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;900&family=Cinzel+Decorative:wght@400;700&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --gold: #c9a84c;
+      --gold-light: #f0d080;
+      --gold-dim: #7a6030;
+      --bg: #0a0a0a;
+      --surface: #111;
+      --text: #e8dcc8;
+      --text-dim: #7a7060;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Cinzel', serif;
+      overflow-x: hidden;
+      cursor: none;
+    }
+
+    .cursor {
+      width: 10px;
+      height: 10px;
+      background: var(--gold);
+      border-radius: 50%;
+      position: fixed;
+      pointer-events: none;
+      z-index: 9999;
+      transform: translate(-50%, -50%);
+      transition: transform 0.1s, background 0.2s;
+      mix-blend-mode: difference;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 1000;
+      opacity: 0.4;
+    }
+
+    /* ─── SECTION 1: Landing ─── */
+    #landing {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .board-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(201, 168, 76, 0.03) 2px, transparent 2px),
+        linear-gradient(90deg, rgba(201, 168, 76, 0.03) 2px, transparent 2px);
+      background-size: 80px 80px;
+      animation: gridDrift 5s linear infinite;
+    }
+
+    @keyframes gridDrift {
+      0% {
+        transform: translate(0, 0);
+      }
+
+      100% {
+        transform: translate(80px, 80px);
+      }
+    }
+
+    .piece-grid {
+      position: absolute;
+      inset: -320px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 320' width='320' height='320'%3E%3Ctext x='40' y='55' font-size='45' text-anchor='middle' fill='%23c9a84c' opacity='0.15'%3E%E2%99%98%3C/text%3E%3Ctext x='200' y='135' font-size='35' text-anchor='middle' fill='%23c9a84c' opacity='0.2'%3E%E2%99%99%3C/text%3E%3Ctext x='120' y='295' font-size='40' text-anchor='middle' fill='%23c9a84c' opacity='0.15'%3E%E2%99%95%3C/text%3E%3Ctext x='280' y='215' font-size='40' text-anchor='middle' fill='%23c9a84c' opacity='0.15'%3E%E2%99%96%3C/text%3E%3C/svg%3E");
+      background-size: 320px 320px;
+      animation: pieceDrift 20s linear infinite;
+    }
+
+    @keyframes pieceDrift {
+      0% {
+        transform: translate(0, 0);
+      }
+      100% {
+        transform: translate(320px, 320px);
+      }
+    }
+
+    .vignette {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at center, transparent 50%, var(--bg) 75%);
+      pointer-events: none;
+    }
+
+    .logo {
+      width: clamp(60px, 10vw, 100px);
+      height: auto;
+      margin: 0 auto 3rem;
+      display: block;
+      filter: drop-shadow(0 0 20px rgba(201, 168, 76, 0.4));
+    }
+
+    .title-block {
+      text-align: center;
+      z-index: 2;
+      animation: fadeUp 1.2s ease both;
+    }
+
+    @keyframes fadeUp {
+      from {
+        opacity: 0;
+        transform: translateY(30px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .engine-label {
+      font-family: 'Cinzel Decorative', serif;
+      font-size: clamp(2rem, 6vw, 5rem);
+      font-weight: 700;
+      letter-spacing: 0.10em;
+      color: var(--gold);
+      text-shadow: 0 0 60px rgba(201, 168, 76, 0.4), 0 0 120px rgba(201, 168, 76, 0.15);
+      line-height: 1;
+    }
+
+    .engine-sub {
+      font-family: 'Cinzel', serif;
+      font-size: clamp(0.65rem, 1.5vw, 0.85rem);
+      font-weight: 600;
+      letter-spacing: 0.4em;
+      color: var(--text-dim);
+      margin-top: 1rem;
+      text-transform: uppercase;
+    }
+
+    .piece-wrap {
+      margin: 3rem 0 2.5rem;
+      position: relative;
+      z-index: 2;
+      animation: fadeUp 1.4s 0.2s ease both;
+    }
+
+    #chess-piece {
+      width: 160px;
+      height: 160px;
+      filter: drop-shadow(0 0 30px rgba(201, 168, 76, 0.5)) drop-shadow(0 0 80px rgba(201, 168, 76, 0.2));
+    }
+
+    .scroll-hint {
+      z-index: 2;
+      text-align: center;
+      margin-top: 5rem;
+      animation: fadeUp 1.6s 0.4s ease both;
+    }
+
+    .scroll-hint span {
+      font-size: 0.7rem;
+      letter-spacing: 0.5em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+    }
+
+    .scroll-line {
+      width: 1px;
+      height: 50px;
+      background: linear-gradient(to bottom, var(--gold-dim), transparent);
+      margin: 12px auto 0;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 0.4;
+        transform: scaleY(1);
+      }
+
+      50% {
+        opacity: 1;
+        transform: scaleY(1.15);
+      }
+    }
+
+    /* ─── SECTION 2: Transition ─── */
+    #transition-zone {
+      height: 300vh;
+      position: relative;
+    }
+
+    #sticky-stage {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .morph-piece {
+      width: 220px;
+      height: 220px;
+      filter: drop-shadow(0 0 40px rgba(201, 168, 76, 0.6)) drop-shadow(0 0 100px rgba(201, 168, 76, 0.25));
+      transition: filter 0.3s;
+    }
+
+    .morph-label {
+      margin-top: 2rem;
+      font-size: 0.8rem;
+      letter-spacing: 0.5em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity 0.4s, transform 0.4s;
+    }
+
+    .morph-label.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .particles {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    .particle {
+      position: absolute;
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      background: var(--gold);
+      opacity: 0;
+    }
+
+    /* ─── SECTION 3: Options ─── */
+    #options {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      gap: 2rem;
+      overflow: hidden;
+    }
+
+    .options-title {
+      font-size: clamp(0.6rem, 1.5vw, 0.8rem);
+      letter-spacing: 0.6em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 1rem;
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.6s, transform 0.6s;
+    }
+
+    .options-title.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .menu-btn {
+      display: block;
+      width: clamp(260px, 40vw, 380px);
+      padding: 1.4rem 2rem;
+      text-align: center;
+      font-family: 'Cinzel', serif;
+      font-size: clamp(0.85rem, 2vw, 1.1rem);
+      font-weight: 600;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      text-decoration: none;
+      border: 1px solid var(--gold-dim);
+      color: var(--text);
+      background: transparent;
+      cursor: none;
+      position: relative;
+      overflow: hidden;
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.6s, transform 0.6s, color 0.3s, border-color 0.3s;
+    }
+
+    .menu-btn::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: var(--gold);
+      transform: translateX(-101%);
+      transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: -1;
+    }
+
+    .menu-btn:hover::before {
+      transform: translateX(0);
+    }
+
+    .menu-btn:hover {
+      color: var(--bg);
+      border-color: var(--gold);
+    }
+
+    .menu-btn.primary {
+      background: linear-gradient(135deg, rgba(201, 168, 76, 0.08), rgba(201, 168, 76, 0.02));
+      border-color: var(--gold);
+      color: var(--gold);
+    }
+
+    .menu-btn.primary:hover {
+      color: var(--bg);
+    }
+
+    .menu-btn.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .menu-btn:nth-child(3) {
+      transition-delay: 0.15s;
+    }
+
+    .corner-deco {
+      position: absolute;
+      width: 60px;
+      height: 60px;
+      opacity: 0.2;
+    }
+
+    .corner-deco.tl {
+      top: 40px;
+      left: 40px;
+      border-top: 1px solid var(--gold);
+      border-left: 1px solid var(--gold);
+    }
+
+    .corner-deco.tr {
+      top: 40px;
+      right: 40px;
+      border-top: 1px solid var(--gold);
+      border-right: 1px solid var(--gold);
+    }
+
+    .corner-deco.bl {
+      bottom: 40px;
+      left: 40px;
+      border-bottom: 1px solid var(--gold);
+      border-left: 1px solid var(--gold);
+    }
+
+    .corner-deco.br {
+      bottom: 40px;
+      right: 40px;
+      border-bottom: 1px solid var(--gold);
+      border-right: 1px solid var(--gold);
+    }
+
+    /* ─── Menu Panels ─── */
+    .menu-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2rem;
+      position: absolute;
+      width: 100%;
+      transition: opacity 0.45s ease, transform 0.45s ease;
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .menu-panel.hidden {
+      opacity: 0;
+      transform: translateX(60px);
+      pointer-events: none;
+    }
+
+    .menu-panel.slide-out {
+      opacity: 0;
+      transform: translateX(-60px);
+      pointer-events: none;
+    }
+
+    /* icon + label layout inside buttons */
+    .btn-icon {
+      display: block;
+      font-size: 1.1rem;
+      letter-spacing: 0.15em;
+      margin-bottom: 0.25rem;
+      opacity: 0.7;
+    }
+
+    .btn-label {
+      display: block;
+    }
+
+    /* Back button — smaller, dimmer */
+    .back-btn {
+      border-color: transparent !important;
+      color: var(--text-dim) !important;
+      font-size: 0.75rem !important;
+      letter-spacing: 0.4em !important;
+      padding: 0.6rem 1rem !important;
+      width: auto !important;
+    }
+
+    .back-btn:hover {
+      color: var(--gold) !important;
+      border-color: transparent !important;
+      background: transparent !important;
+    }
+
+    .back-btn::before {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="cursor" id="cursor"></div>
+
+  <!-- ─── SECTION 1: Landing ─── -->
+  <section id="landing">
+    <div class="board-grid"></div>
+    <div class="piece-grid"></div>
+    <div class="vignette"></div>
+
+    <div class="title-block">
+      <img src="Logo.png" alt="En Passant Logo" class="logo" />
+      <div class="engine-label">EN PASSANT</div>
+      <div class="engine-sub">CHESS GAME</div>
+    </div>
+
+    <div class="scroll-hint">
+      <span>Scroll to start</span>
+      <div class="scroll-line"></div>
+    </div>
+  </section>
+
+  <!-- ─── SECTION 2: Transition ─── -->
+  <section id="transition-zone">
+    <div id="sticky-stage">
+      <div class="particles" id="particles"></div>
+
+      <svg class="morph-piece" id="morph-svg" viewBox="0 0 100 120" xmlns="http://www.w3.org/2000/svg">
+        <ellipse cx="50" cy="108" rx="28" ry="7" fill="rgba(201,168,76,0.2)" />
+        <rect id="m-base" x="33" y="96" width="34" height="10" rx="3" fill="#c9a84c" />
+
+        <g id="pawn-body">
+          <rect x="40" y="70" width="20" height="30" rx="4" fill="#c9a84c" />
+          <line x1="40" y1="88" x2="60" y2="88" stroke="rgba(0,0,0,0.2)" stroke-width="1" />
+          <circle cx="50" cy="62" r="13" fill="#c9a84c" />
+          <circle cx="50" cy="62" r="8" fill="#b8943e" />
+          <circle cx="50" cy="62" r="5" fill="#c9a84c" />
+          <circle cx="46" cy="59" r="2.5" fill="rgba(255,255,255,0.25)" />
+        </g>
+
+        <g id="queen-body" opacity="0">
+          <path d="M30 96 Q34 70 40 60 Q50 55 60 60 Q66 70 70 96 Z" fill="#c9a84c" />
+          <line x1="35" y1="80" x2="65" y2="80" stroke="rgba(0,0,0,0.15)" stroke-width="1.5" />
+          <line x1="32" y1="88" x2="68" y2="88" stroke="rgba(0,0,0,0.15)" stroke-width="1.5" />
+          <rect x="44" y="50" width="12" height="12" rx="2" fill="#c9a84c" />
+          <circle cx="50" cy="44" r="12" fill="#c9a84c" />
+          <circle cx="50" cy="44" r="8" fill="#b8943e" />
+          <rect x="36" y="28" width="28" height="8" rx="2" fill="#c9a84c" />
+          <circle cx="50" cy="26" r="4" fill="#c9a84c" />
+          <circle cx="38" cy="28" r="3.5" fill="#c9a84c" />
+          <circle cx="62" cy="28" r="3.5" fill="#c9a84c" />
+          <circle cx="50" cy="26" r="2" fill="#f0d080" />
+          <circle cx="38" cy="28" r="1.8" fill="#f0d080" />
+          <circle cx="62" cy="28" r="1.8" fill="#f0d080" />
+          <circle cx="45" cy="41" r="3" fill="rgba(255,255,255,0.25)" />
+        </g>
+      </svg>
+
+      <div class="morph-label" id="morph-label">"Every Pawn aspires to become a queen"</div>
+    </div>
+  </section>
+
+  <!-- ─── SECTION 3: Options ─── -->
+  <section id="options">
+    <div class="corner-deco tl"></div>
+    <div class="corner-deco tr"></div>
+    <div class="corner-deco bl"></div>
+    <div class="corner-deco br"></div>
+
+    <!-- PANEL A: Main menu -->
+    <div class="menu-panel" id="panel-main">
+      <p class="options-title" id="opts-title">Choose your path</p>
+      <a href="#" class="menu-btn primary" id="btn-play">Play a Game</a>
+      <a href="#" class="menu-btn" id="btn-back">Back</a>
+    </div>
+
+    <!-- PANEL B: Game mode -->
+    <div class="menu-panel hidden" id="panel-mode">
+      <p class="options-title visible" id="mode-title">Select Mode</p>
+      
+      <a href="Board.html?mode=pvp" class="menu-btn primary visible" id="btn-pvp">
+        <span class="btn-icon">♟ ♟</span>
+        <span class="btn-label">Player vs Player</span>
+      </a>
+      
+      <a href="Board.html?mode=cpu&color=white" class="menu-btn primary visible" id="btn-cpu-w">
+        <span class="btn-icon">♙ ⚙</span>
+        <span class="btn-label">vs Computer (Play White)</span>
+      </a>
+      
+      <a href="Board.html?mode=cpu&color=black" class="menu-btn primary visible" id="btn-cpu-b">
+        <span class="btn-icon">♟ ⚙</span>
+        <span class="btn-label">vs Computer (Play Black)</span>
+      </a>
+      
+      <a href="#" class="menu-btn back-btn visible" id="btn-mode-back">← Back</a>
+    </div>
+  </section>
+
+  <script>
+    // Cursor
+    const cursor = document.getElementById('cursor');
+    document.addEventListener('mousemove', e => {
+      cursor.style.left = e.clientX + 'px';
+      cursor.style.top = e.clientY + 'px';
+    });
+
+    // Particles
+    const particleContainer = document.getElementById('particles');
+    const particlePool = [];
+    for (let i = 0; i < 30; i++) {
+      const p = document.createElement('div');
+      p.className = 'particle';
+      particleContainer.appendChild(p);
+      particlePool.push(p);
+    }
+
+    function burstParticles() {
+      particlePool.forEach((p, i) => {
+        const cx = window.innerWidth / 2;
+        const cy = window.innerHeight / 2;
+        const angle = (Math.PI * 2 * i) / particlePool.length + Math.random() * 0.5;
+        const dist = 80 + Math.random() * 180;
+        const tx = Math.cos(angle) * dist;
+        const ty = Math.sin(angle) * dist;
+        p.style.left = cx + 'px';
+        p.style.top = cy + 'px';
+        p.style.opacity = '0';
+        p.style.transition = 'none';
+        p.style.transform = 'translate(-50%,-50%) scale(1)';
+        requestAnimationFrame(() => {
+          p.style.transition = `opacity 0.4s, transform ${0.6 + Math.random() * 0.5}s ease-out`;
+          p.style.opacity = '0.9';
+          p.style.transform = `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(0)`;
+          setTimeout(() => { p.style.opacity = '0'; }, 400);
+        });
+      });
+    }
+
+    // Scroll morph
+    const transZone = document.getElementById('transition-zone');
+    const pawnBody = document.getElementById('pawn-body');
+    const queenBody = document.getElementById('queen-body');
+    const morphLabel = document.getElementById('morph-label');
+    const morphSvg = document.getElementById('morph-svg');
+    const optsTitle = document.getElementById('opts-title');
+    const btnPlay = document.getElementById('btn-play');
+    const btnBack = document.getElementById('btn-back');
+
+    let hasBurst = false;
+    let optionsVisible = false;
+
+    function easeInOut(t) { return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; }
+    function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+
+    window.addEventListener('scroll', () => {
+      const zoneTop = transZone.getBoundingClientRect().top + window.scrollY;
+      const zoneHeight = transZone.offsetHeight - window.innerHeight;
+      const scrolled = window.scrollY - zoneTop;
+      const progress = clamp01(scrolled / zoneHeight);
+      const eased = easeInOut(progress);
+
+      const pawnOpacity = clamp01(1 - eased * 2.2);
+      const queenOpacity = clamp01((eased - 0.35) * 2.2);
+
+      pawnBody.setAttribute('opacity', pawnOpacity);
+      queenBody.setAttribute('opacity', queenOpacity);
+
+      const glowMid = Math.sin(progress * Math.PI);
+      morphSvg.style.filter = `drop-shadow(0 0 ${40 + glowMid * 60}px rgba(201,168,76,${0.5 + glowMid * 0.5})) drop-shadow(0 0 ${100 + glowMid * 80}px rgba(201,168,76,${0.2 + glowMid * 0.3}))`;
+
+      const scale = 1 + Math.sin(progress * Math.PI) * 0.12;
+      morphSvg.style.transform = `scale(${scale})`;
+
+      if (queenOpacity > 0.4) {
+        morphLabel.classList.add('visible');
+      } else {
+        morphLabel.classList.remove('visible');
+      }
+
+      if (progress > 0.45 && progress < 0.65 && !hasBurst) {
+        hasBurst = true;
+        burstParticles();
+      }
+      if (progress < 0.4) hasBurst = false;
+
+      const optRect = document.getElementById('options').getBoundingClientRect();
+      if (optRect.top < window.innerHeight * 0.75 && !optionsVisible) {
+        optionsVisible = true;
+        optsTitle.classList.add('visible');
+        setTimeout(() => btnPlay.classList.add('visible'), 100);
+        setTimeout(() => btnBack.classList.add('visible'), 250);
+      }
+    });
+
+    // ─── Panel switching ───
+    const panelMain = document.getElementById('panel-main');
+    const panelMode = document.getElementById('panel-mode');
+
+    function showPanel(incoming, outgoing) {
+      // slide outgoing left
+      outgoing.classList.remove('hidden');
+      outgoing.classList.add('slide-out');
+      // slide incoming in from right
+      incoming.classList.remove('hidden');
+      incoming.style.transform = 'translateX(60px)';
+      incoming.style.opacity = '0';
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          incoming.style.transition = 'opacity 0.45s ease, transform 0.45s ease';
+          incoming.style.transform = 'translateX(0)';
+          incoming.style.opacity = '1';
+        });
+      });
+      setTimeout(() => {
+        outgoing.classList.add('hidden');
+        outgoing.classList.remove('slide-out');
+        outgoing.style.transform = '';
+        outgoing.style.opacity = '';
+      }, 460);
+    }
+
+    function showPanelReverse(incoming, outgoing) {
+      // slide outgoing right
+      outgoing.classList.remove('hidden');
+      outgoing.style.transition = 'opacity 0.45s ease, transform 0.45s ease';
+      outgoing.style.transform = 'translateX(60px)';
+      outgoing.style.opacity = '0';
+      // slide incoming in from left
+      incoming.classList.remove('hidden');
+      incoming.style.transition = 'none';
+      incoming.style.transform = 'translateX(-60px)';
+      incoming.style.opacity = '0';
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          incoming.style.transition = 'opacity 0.45s ease, transform 0.45s ease';
+          incoming.style.transform = 'translateX(0)';
+          incoming.style.opacity = '1';
+        });
+      });
+      setTimeout(() => {
+        outgoing.classList.add('hidden');
+        outgoing.style.transform = '';
+        outgoing.style.opacity = '';
+        outgoing.style.transition = '';
+      }, 460);
+    }
+
+    document.getElementById('btn-play').addEventListener('click', e => {
+      e.preventDefault();
+      showPanel(panelMode, panelMain);
+    });
+
+    document.getElementById('btn-pvp').addEventListener('click', e => {
+      window.location.href = 'Board.html?mode=pvp';
+    });
+
+    document.getElementById('btn-cpu').addEventListener('click', e => {
+      window.location.href = 'Board.html?mode=cpu';
+    });
+
+    document.getElementById('btn-mode-back').addEventListener('click', e => {
+      e.preventDefault();
+      showPanelReverse(panelMain, panelMode);
+    });
+
+    // btn-back scrolls back to top
+    document.getElementById('btn-back').addEventListener('click', e => {
+      e.preventDefault();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  </script>
+</body>
+
+</html>
