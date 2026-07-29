@@ -14,15 +14,21 @@ public class WebServer {
 
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
         server.createContext("/api/move", new MoveHandler());
-        server.setExecutor(null); 
+        server.setExecutor(null);
         server.start();
         System.out.println("Chess Engine API running on port " + port);
     }
 
     static class MoveHandler implements HttpHandler {
+
+        // Keep persistent instances of your board and engine here
+        // (or manage state per game if you have a session manager)
+        private static Bitboard board = new Bitboard();
+        private static ChessEngine engine = new ChessEngine();
+
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            // 1. CORS Headers
+            // 1. Handle CORS (Allow frontend to communicate with Render backend)
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
             exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
             exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
@@ -33,31 +39,76 @@ public class WebServer {
             }
 
             if ("POST".equals(exchange.getRequestMethod())) {
+                // 2. Read the raw request body string (e.g. "CPU|RESET|BLACK" or
+                // "CPU|e2e4|WHITE")
                 InputStream is = exchange.getRequestBody();
-                String requestBody = new String(is.readAllBytes()); // e.g., "CPU|RESET|WHITE"
+                String requestBody = new String(is.readAllBytes());
 
-                // ==============================================================
-                // TODO: Pass 'requestBody' to your Bitboard Engine
-                // Parse mode, move, and player color (e.g. split by "|")
-                // ==============================================================
+                // 3. Parse the pipe-delimited payload
+                String[] parts = requestBody.split("\\|");
+                String mode = parts[0]; // "CPU" or "PVP"
+                String move = parts[1]; // "e2e4" or "RESET"
+                String humanColor = parts[2]; // "WHITE" or "BLACK"
 
-                // Dummy response matching the format expected by Board.html:
-                // Format: FEN|LAST_MOVE|LEGAL_MOVES|TURN
-                String fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
-                String lastMove = "e2e4"; 
-                String legalMoves = "e7e5,e7e6,g8f6,b8c6"; // Comma-separated valid moves
-                String turn = "White";
+                String responseText = "";
 
-                String responseText = fen + "|" + lastMove + "|" + legalMoves + "|" + turn;
+                // 4. Game Logic Processing
+                if ("RESET".equals(move)) {
+                    // Reset internal board state
+                    board.resetToStartingPosition();
 
+                    if ("CPU".equals(mode) && "BLACK".equals(humanColor)) {
+                        // Human is Black -> CPU moves 1st as White
+                        String engineMove = engine.getBestMove(board);
+                        board.makeMove(engineMove);
+
+                        String fen = board.toFen();
+                        String legalMoves = board.getLegalMoves(); // Black's legal responses
+                        String turn = "Black";
+
+                        responseText = fen + "|" + engineMove + "|" + legalMoves + "|" + turn;
+                    } else {
+                        // Human is White or PVP -> Human goes 1st
+                        String fen = board.toFen();
+                        String legalMoves = board.getLegalMoves(); // White's starting legal moves
+                        String turn = "White";
+
+                        responseText = fen + "||" + legalMoves + "|" + turn;
+                    }
+                } else {
+                    // Apply human's move
+                    board.makeMove(move);
+
+                    if ("CPU".equals(mode) && !board.isGameOver()) {
+                        // Engine counter-move
+                        String engineMove = engine.getBestMove(board);
+                        board.makeMove(engineMove);
+
+                        String fen = board.toFen();
+                        String legalMoves = board.getLegalMoves(); // Human's legal moves for next turn
+                        String activeTurn = board.getTurn(); // "White" or "Black"
+
+                        responseText = fen + "|" + engineMove + "|" + legalMoves + "|" + activeTurn;
+                    } else {
+                        // PVP Mode or Game Over
+                        String fen = board.toFen();
+                        String legalMoves = board.getLegalMoves();
+                        String activeTurn = board.getTurn();
+
+                        responseText = fen + "|" + move + "|" + legalMoves + "|" + activeTurn;
+                    }
+                }
+
+                // 5. Send response back to frontend
+                byte[] responseBytes = responseText.getBytes();
                 exchange.getResponseHeaders().set("Content-Type", "text/plain");
-                exchange.sendResponseHeaders(200, responseText.getBytes().length);
-                
+                exchange.sendResponseHeaders(200, responseBytes.length);
+
                 OutputStream os = exchange.getResponseBody();
-                os.write(responseText.getBytes());
+                os.write(responseBytes);
                 os.close();
             } else {
-                exchange.sendResponseHeaders(405, -1);
+                exchange.sendResponseHeaders(405, -1); // Method Not Allowed
             }
         }
     }
