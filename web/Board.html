@@ -547,7 +547,7 @@
     // Update the top header text dynamically
     let headerText = gameMode === 'pvp' ? 'Player vs Player' : 'vs Computer';
     if (gameMode === 'cpu') headerText += ` (${playerColorPref === 'white' ? 'White' : 'Black'})`;
-    document.getElementById('header-mode').textContent = gameMode === 'pvp' ? 'Player vs Player' : 'vs Computer';
+    document.getElementById('header-mode').textContent = headerText;
 
     // ── Cursor ──
     const cursor = document.getElementById('cursor');
@@ -681,28 +681,7 @@
       buildBoard();
       loadFEN(currentFen);
     });
-
-    // ── New game ──
-    document.getElementById('btn-new').addEventListener('click', e => {
-      e.preventDefault();
-
-      // Tell Java to wipe the board and start over
-      fetch('http://localhost:8080/api/move', {
-        method: 'POST',
-        body: 'RESET'
-      })
-        .then(response => response.text())
-        .then(newFen => {
-          loadFEN(newFen); // Redraw the fresh board
-
-          // Reset the UI text
-          document.getElementById('move-count').textContent = '1';
-          document.getElementById('turn-text').textContent = 'White';
-          document.getElementById('turn-dot').className = 'turn-dot white-turn';
-          document.getElementById('game-status').textContent = 'In Progress';
-        });
-    });
-
+    
     // ── Interaction Logic ──
 
     let selectedSquare = null;
@@ -799,7 +778,7 @@
      // 2. Package the payload: "MODE|MOVE|HUMAN_COLOR" (e.g., "CPU|e2e4|WHITE" or "CPU|RESET|BLACK")
     const payload = gameMode.toUpperCase() + "|" + moveString + "|" + playerColorPref.toUpperCase();
 
-      fetch('http://localhost:8080/api/move', {
+      fetch('https://chess-engine-api-1zm6.onrender.com/api/move', {
         method: 'POST',
         body: payload
       })

@@ -9,7 +9,6 @@ import java.net.InetSocketAddress;
 public class WebServer {
 
     public static void main(String[] args) throws Exception {
-        // Render assigns a dynamic port via the PORT environment variable
         String portEnv = System.getenv("PORT");
         int port = (portEnv != null) ? Integer.parseInt(portEnv) : 8080;
 
@@ -23,7 +22,7 @@ public class WebServer {
     static class MoveHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            // 1. Handle CORS Preflight request
+            // 1. CORS Headers
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
             exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
             exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
@@ -33,25 +32,32 @@ public class WebServer {
                 return;
             }
 
-            // 2. Process the actual POST request
             if ("POST".equals(exchange.getRequestMethod())) {
                 InputStream is = exchange.getRequestBody();
-                String requestBody = new String(is.readAllBytes());
+                String requestBody = new String(is.readAllBytes()); // e.g., "CPU|RESET|WHITE"
 
-                // TODO: Parse requestBody (JSON) to get the user's move
-                // TODO: Pass move to your bitboard engine & check legality
-                // TODO: Calculate engine's optimal response
+                // ==============================================================
+                // TODO: Pass 'requestBody' to your Bitboard Engine
+                // Parse mode, move, and player color (e.g. split by "|")
+                // ==============================================================
 
-                // Example JSON response
-                String jsonResponse = "{ \"newBoardState\": \"...\", \"engineMove\": \"e7e5\" }";
+                // Dummy response matching the format expected by Board.html:
+                // Format: FEN|LAST_MOVE|LEGAL_MOVES|TURN
+                String fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+                String lastMove = "e2e4"; 
+                String legalMoves = "e7e5,e7e6,g8f6,b8c6"; // Comma-separated valid moves
+                String turn = "White";
+
+                String responseText = fen + "|" + lastMove + "|" + legalMoves + "|" + turn;
+
+                exchange.getResponseHeaders().set("Content-Type", "text/plain");
+                exchange.sendResponseHeaders(200, responseText.getBytes().length);
                 
-                exchange.getResponseHeaders().set("Content-Type", "application/json");
-                exchange.sendResponseHeaders(200, jsonResponse.length());
                 OutputStream os = exchange.getResponseBody();
-                os.write(jsonResponse.getBytes());
+                os.write(responseText.getBytes());
                 os.close();
             } else {
-                exchange.sendResponseHeaders(405, -1); // Method Not Allowed
+                exchange.sendResponseHeaders(405, -1);
             }
         }
     }
