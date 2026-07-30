@@ -8,7 +8,7 @@ WORKDIR /app
 COPY . .
 
 # Compile the Java code
-RUN javac *.java
+RUN find . -name "*.java" > sources.txt && javac @sources.txt
 
 # Run the web server
 CMD ["java", "WebServer"]
