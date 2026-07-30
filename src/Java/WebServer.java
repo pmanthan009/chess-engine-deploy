@@ -21,7 +21,7 @@ public class WebServer {
     }
 
     static class MoveHandler implements HttpHandler {
-        
+
         private static Board board = new Board();
         private static MoveGen moveGen = new MoveGen();
         private static boolean isWhiteTurn = true;
@@ -68,12 +68,27 @@ public class WebServer {
                         isWhiteTurn = !isWhiteTurn; // Switch turn
                     }
 
+                    String cpuMovePlayedStr = "";
+
+                    // If CPU mode and it's CPU's turn, make CPU move
+                    if ("CPU".equalsIgnoreCase(mode)) {
+                        List<Move> cpuLegalMoves = moveGen.getLegalMoves(board, isWhiteTurn);
+                        if (!cpuLegalMoves.isEmpty()) {
+                            // Pick a move (random selection for now, or pass to your evaluation/search
+                            // logic)
+                            Move cpuMove = cpuLegalMoves.get((int) (Math.random() * cpuLegalMoves.size()));
+                            board.makeMove(cpuMove, isWhiteTurn);
+                            cpuMovePlayedStr = formatSingleMove(cpuMove);
+                            isWhiteTurn = !isWhiteTurn; // Switch turn back to Human
+                        }
+                    }
+
                     List<Move> legalMoves = moveGen.getLegalMoves(board, isWhiteTurn);
                     String legalStr = formatLegalMoves(legalMoves);
                     String fen = board.toFEN();
                     String turnStr = isWhiteTurn ? "White" : "Black";
 
-                    responseText = fen + "|" + moveStr + "|" + legalStr + "|" + turnStr;
+                    responseText = fen + "|" + cpuMovePlayedStr + "|" + legalStr + "|" + turnStr;
                 }
 
                 // Send Response
@@ -121,6 +136,15 @@ public class WebServer {
                     sb.append(",");
             }
             return sb.toString();
+        }
+
+        private static String formatSingleMove(Move m) {
+            if (m == null)
+                return "";
+            return "" + (char) ('a' + (m.startSquare % 8))
+                    + (char) ('1' + (m.startSquare / 8))
+                    + (char) ('a' + (m.targetSquare % 8))
+                    + (char) ('1' + (m.targetSquare / 8));
         }
     }
 }
