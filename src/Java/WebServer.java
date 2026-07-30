@@ -25,10 +25,12 @@ public class WebServer {
         private static Board board = new Board();
         private static MoveGen moveGen = new MoveGen();
         private static boolean isWhiteTurn = true;
+        private static Search search = new Search();
+        private static final int ENGINE_DEPTH = 6;
 
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            // 1. CORS Headers
+            // CORS Headers
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
             exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
             exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
@@ -42,7 +44,7 @@ public class WebServer {
                 InputStream is = exchange.getRequestBody();
                 String requestBody = new String(is.readAllBytes());
 
-                // Payload structure: "CPU|RESET|BLACK" or "CPU|e2e4|WHITE"
+                // Payload: "MODE|MOVE|HUMAN_COLOR" (e.g. "CPU|e2e4|WHITE" or "CPU|RESET|BLACK")
                 String[] parts = requestBody.split("\\|");
                 String mode = parts[0];
                 String moveStr = parts[1];
@@ -54,35 +56,51 @@ public class WebServer {
                     board = new Board(); // Reset board state
                     isWhiteTurn = true;
 
-                    List<Move> legalMoves = moveGen.getLegalMoves(board, true);
+                    String cpuMovePlayedStr = "";
+
+                    // If playing as BLACK against CPU, CPU (White) plays move #1 immediately!
+                    if ("CPU".equalsIgnoreCase(mode) && "BLACK".equalsIgnoreCase(humanColor)) {
+                        // Call search algorithm with the configured depth!
+                        Move cpuMove = search.getBestMove(board, ENGINE_DEPTH, isWhiteTurn);
+
+                        if (cpuMove != null) {
+                            board.makeMove(cpuMove, isWhiteTurn);
+                            cpuMovePlayedStr = formatSingleMove(cpuMove);
+                            isWhiteTurn = !isWhiteTurn; // Switch turn to Black (Human)
+                        }
+                    }
+
+                    List<Move> legalMoves = moveGen.getLegalMoves(board, isWhiteTurn);
                     String legalStr = formatLegalMoves(legalMoves);
                     String fen = board.toFEN();
+                    String turnStr = isWhiteTurn ? "White" : "Black";
 
-                    responseText = fen + "||" + legalStr + "|White";
+                    // Format: FEN | CpuMove | LegalMoves | ActiveTurn
+                    responseText = fen + "|" + cpuMovePlayedStr + "|" + legalStr + "|" + turnStr;
+
                 } else {
-                    // Parse human move (e.g. "e2e4")
+                    // 1. Execute Human Move
                     Move playedMove = parseMoveString(moveStr, moveGen.getLegalMoves(board, isWhiteTurn));
-
                     if (playedMove != null) {
                         board.makeMove(playedMove, isWhiteTurn);
-                        isWhiteTurn = !isWhiteTurn; // Switch turn
+                        isWhiteTurn = !isWhiteTurn; // Switch turn to CPU
                     }
 
                     String cpuMovePlayedStr = "";
 
-                    // If CPU mode and it's CPU's turn, make CPU move
+                    // Execute CPU response move immediately
                     if ("CPU".equalsIgnoreCase(mode)) {
-                        List<Move> cpuLegalMoves = moveGen.getLegalMoves(board, isWhiteTurn);
-                        if (!cpuLegalMoves.isEmpty()) {
-                            // Pick a move (random selection for now, or pass to your evaluation/search
-                            // logic)
-                            Move cpuMove = cpuLegalMoves.get((int) (Math.random() * cpuLegalMoves.size()));
+                        // Call search algorithm with the configured depth!
+                        Move cpuMove = search.getBestMove(board, ENGINE_DEPTH, isWhiteTurn);
+
+                        if (cpuMove != null) {
                             board.makeMove(cpuMove, isWhiteTurn);
                             cpuMovePlayedStr = formatSingleMove(cpuMove);
                             isWhiteTurn = !isWhiteTurn; // Switch turn back to Human
                         }
                     }
 
+                    // 3. Return legal moves for next human turn
                     List<Move> legalMoves = moveGen.getLegalMoves(board, isWhiteTurn);
                     String legalStr = formatLegalMoves(legalMoves);
                     String fen = board.toFEN();
