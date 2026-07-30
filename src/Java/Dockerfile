@@ -8,7 +8,7 @@ WORKDIR /app
 COPY . .
 
 # Compile the Java code
-RUN javac WebServer.java
+RUN javac *.java
 
 # Run the web server
 CMD ["java", "WebServer"]
