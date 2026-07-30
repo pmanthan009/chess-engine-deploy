@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
+import java.util.List;
 
 public class WebServer {
 
@@ -20,15 +21,14 @@ public class WebServer {
     }
 
     static class MoveHandler implements HttpHandler {
-
-        // Keep persistent instances of your board and engine here
-        // (or manage state per game if you have a session manager)
-        private static Bitboard board = new Bitboard();
-        private static ChessEngine engine = new ChessEngine();
+        
+        private static Board board = new Board();
+        private static MoveGen moveGen = new MoveGen();
+        private static boolean isWhiteTurn = true;
 
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            // 1. Handle CORS (Allow frontend to communicate with Render backend)
+            // 1. CORS Headers
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
             exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
             exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
@@ -39,67 +39,44 @@ public class WebServer {
             }
 
             if ("POST".equals(exchange.getRequestMethod())) {
-                // 2. Read the raw request body string (e.g. "CPU|RESET|BLACK" or
-                // "CPU|e2e4|WHITE")
                 InputStream is = exchange.getRequestBody();
                 String requestBody = new String(is.readAllBytes());
 
-                // 3. Parse the pipe-delimited payload
+                // Payload structure: "CPU|RESET|BLACK" or "CPU|e2e4|WHITE"
                 String[] parts = requestBody.split("\\|");
-                String mode = parts[0]; // "CPU" or "PVP"
-                String move = parts[1]; // "e2e4" or "RESET"
-                String humanColor = parts[2]; // "WHITE" or "BLACK"
+                String mode = parts[0];
+                String moveStr = parts[1];
+                String humanColor = parts[2];
 
                 String responseText = "";
 
-                // 4. Game Logic Processing
-                if ("RESET".equals(move)) {
-                    // Reset internal board state
-                    board.resetToStartingPosition();
+                if ("RESET".equals(moveStr)) {
+                    board = new Board(); // Reset board state
+                    isWhiteTurn = true;
 
-                    if ("CPU".equals(mode) && "BLACK".equals(humanColor)) {
-                        // Human is Black -> CPU moves 1st as White
-                        String engineMove = engine.getBestMove(board);
-                        board.makeMove(engineMove);
+                    List<Move> legalMoves = moveGen.getLegalMoves(board, true);
+                    String legalStr = formatLegalMoves(legalMoves);
+                    String fen = board.toFEN();
 
-                        String fen = board.toFen();
-                        String legalMoves = board.getLegalMoves(); // Black's legal responses
-                        String turn = "Black";
-
-                        responseText = fen + "|" + engineMove + "|" + legalMoves + "|" + turn;
-                    } else {
-                        // Human is White or PVP -> Human goes 1st
-                        String fen = board.toFen();
-                        String legalMoves = board.getLegalMoves(); // White's starting legal moves
-                        String turn = "White";
-
-                        responseText = fen + "||" + legalMoves + "|" + turn;
-                    }
+                    responseText = fen + "||" + legalStr + "|White";
                 } else {
-                    // Apply human's move
-                    board.makeMove(move);
+                    // Parse human move (e.g. "e2e4")
+                    Move playedMove = parseMoveString(moveStr, moveGen.getLegalMoves(board, isWhiteTurn));
 
-                    if ("CPU".equals(mode) && !board.isGameOver()) {
-                        // Engine counter-move
-                        String engineMove = engine.getBestMove(board);
-                        board.makeMove(engineMove);
-
-                        String fen = board.toFen();
-                        String legalMoves = board.getLegalMoves(); // Human's legal moves for next turn
-                        String activeTurn = board.getTurn(); // "White" or "Black"
-
-                        responseText = fen + "|" + engineMove + "|" + legalMoves + "|" + activeTurn;
-                    } else {
-                        // PVP Mode or Game Over
-                        String fen = board.toFen();
-                        String legalMoves = board.getLegalMoves();
-                        String activeTurn = board.getTurn();
-
-                        responseText = fen + "|" + move + "|" + legalMoves + "|" + activeTurn;
+                    if (playedMove != null) {
+                        board.makeMove(playedMove, isWhiteTurn);
+                        isWhiteTurn = !isWhiteTurn; // Switch turn
                     }
+
+                    List<Move> legalMoves = moveGen.getLegalMoves(board, isWhiteTurn);
+                    String legalStr = formatLegalMoves(legalMoves);
+                    String fen = board.toFEN();
+                    String turnStr = isWhiteTurn ? "White" : "Black";
+
+                    responseText = fen + "|" + moveStr + "|" + legalStr + "|" + turnStr;
                 }
 
-                // 5. Send response back to frontend
+                // Send Response
                 byte[] responseBytes = responseText.getBytes();
                 exchange.getResponseHeaders().set("Content-Type", "text/plain");
                 exchange.sendResponseHeaders(200, responseBytes.length);
@@ -108,8 +85,42 @@ public class WebServer {
                 os.write(responseBytes);
                 os.close();
             } else {
-                exchange.sendResponseHeaders(405, -1); // Method Not Allowed
+                exchange.sendResponseHeaders(405, -1);
             }
+        }
+
+        // --- HELPER METHODS ---
+
+        // Parses a 4-character move string like "e2e4" into a Move object
+        private static Move parseMoveString(String moveStr, List<Move> legalMoves) {
+            if (moveStr == null || moveStr.length() < 4)
+                return null;
+
+            int startSq = (moveStr.charAt(1) - '1') * 8 + (moveStr.charAt(0) - 'a');
+            int targetSq = (moveStr.charAt(3) - '1') * 8 + (moveStr.charAt(2) - 'a');
+
+            for (Move m : legalMoves) {
+                if (m.startSquare == startSq && m.targetSquare == targetSq) {
+                    return m;
+                }
+            }
+            return new Move(startSq, targetSq);
+        }
+
+        // Converts list of Move objects to comma-separated algebraic strings
+        // ("e2e4,d2d4")
+        private static String formatLegalMoves(List<Move> moves) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < moves.size(); i++) {
+                Move m = moves.get(i);
+                sb.append((char) ('a' + (m.startSquare % 8)))
+                        .append((char) ('1' + (m.startSquare / 8)))
+                        .append((char) ('a' + (m.targetSquare % 8)))
+                        .append((char) ('1' + (m.targetSquare / 8)));
+                if (i < moves.size() - 1)
+                    sb.append(",");
+            }
+            return sb.toString();
         }
     }
 }
