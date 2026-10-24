@@ -10,6 +10,7 @@ import java.util.List;
  *   java Bench tactics [depth]  checks that known mates and tactics are found
  *   java Bench fast             perft through the allocation-free int move path (speed)
  *   java Bench verify           perft that also checks hash, mailbox and captures-only generation
+ *   java Bench rules            game rules and the API: mate, stalemate, repetition, 50 moves, promotion
  */
 public class Bench {
 
@@ -51,6 +52,7 @@ public class Bench {
             case "time": runSearch(0, args.length > 1 ? Long.parseLong(args[1]) : 1000); break;
             case "fast": System.exit(runPerftInt(false) ? 0 : 1); break;
             case "verify": System.exit(runPerftInt(true) ? 0 : 1); break;
+            case "rules": System.exit(runRules() ? 0 : 1); break;
             case "tactics": System.exit(runTactics(args.length > 1 ? Integer.parseInt(args[1]) : 5) ? 0 : 1); break;
             default: System.out.println("Unknown mode: " + mode);
         }
@@ -102,9 +104,17 @@ public class Bench {
             return n;
         long total = 0;
         for (int i = 0; i < n; i++) {
+            int clockBefore = b.halfmoveClock;
             b.makeMove(buf[i], white);
+            if (verify) {
+                boolean irreversible = Move.piece(buf[i]) == Move.PAWN || Move.captured(buf[i]) != 0;
+                if (b.halfmoveClock != (irreversible ? 0 : clockBefore + 1))
+                    throw new IllegalStateException("halfmove clock wrong after " + Move.toUci(buf[i]));
+            }
             total += perftInt(gen, b, depth - 1, !white, bufs, ply + 1, verify);
             b.undoMove(white);
+            if (verify && b.halfmoveClock != clockBefore)
+                throw new IllegalStateException("halfmove clock not restored after " + Move.toUci(buf[i]));
         }
         return total;
     }
@@ -193,6 +203,114 @@ public class Bench {
         if ((b.blackQueens & mask) != 0) return 13;
         if ((b.blackKing & mask) != 0) return 14;
         return 0;
+    }
+
+    // ------------------------------------------------------- rules and API tests
+
+    static int ruleFailures;
+
+    static void expect(String name, boolean ok, String detail) {
+        if (!ok)
+            ruleFailures++;
+        System.out.println((ok ? "OK   " : "FAIL ") + name + (ok ? "" : "  -> " + detail));
+    }
+
+    static String[] respond(String request) {
+        try {
+            return GameService.respond(request).split("[|]", -1);
+        } catch (GameService.BadRequest e) {
+            return new String[] { "ERROR", e.getMessage() };
+        }
+    }
+
+    static boolean runRules() {
+        ruleFailures = 0;
+        String shuffle = "g1f3 g8f6 f3g1 f6g8";
+
+        String[] r = respond("PVP|" + shuffle + "|WHITE");
+        expect("one cycle of knight shuffling is not a draw", r.length == 7 && r[5].equals("ONGOING"), String.join("|", r));
+        r = respond("PVP|" + shuffle + " g1f3 g8f6 f3g1|WHITE");
+        expect("second occurrence is not yet a draw", r[5].equals("ONGOING"), String.join("|", r));
+        r = respond("PVP|" + shuffle + " " + shuffle + "|WHITE");
+        expect("threefold repetition is a draw", r[5].equals("DRAW_REPETITION") && r[2].isEmpty(), String.join("|", r));
+
+        r = respond("PVP|f2f3 e7e5 g2g4 d8h4|WHITE");
+        expect("fool's mate is checkmate with White to move and no legal moves",
+                r[5].equals("CHECKMATE") && r[3].equals("White") && r[2].isEmpty(), String.join("|", r));
+
+        r = respond("PVP|e2e3 a7a5 d1h5 a8a6 h5a5 h7h5 h2h4 a6h6 a5c7 f7f6 c7d7 e8f7 d7b7 d8d3 b7b8 d3h7 b8c8 f7g6 c8e6|WHITE");
+        expect("Loyd's 19 move game ends in stalemate", r[5].equals("STALEMATE") && r[3].equals("Black"), String.join("|", r));
+
+        // Fifty-move rule: clock at 98, two quiet moves reach 100.
+        MoveGen gen = new MoveGen();
+        Board b = Board.fromFEN("8/8/8/4k3/8/8/4K3/R7 w - - 98 80");
+        int[] buf = new int[512];
+        int n = gen.genLegal(b, true, buf, 0, false);
+        b.makeMove(buf[0], true);
+        n = gen.genLegal(b, false, buf, 0, false);
+        expect("clock 99 is not yet a draw", GameService.statusOf(b, false, n).equals("ONGOING") && b.halfmoveClock == 99,
+                "clock " + b.halfmoveClock);
+        b.makeMove(buf[0], false);
+        n = gen.genLegal(b, true, buf, 0, false);
+        expect("clock 100 is a draw", GameService.statusOf(b, true, n).equals("DRAW_50") && b.halfmoveClock == 100,
+                "clock " + b.halfmoveClock);
+
+        // A capture resets the clock.
+        b = Board.fromFEN("8/8/8/4k3/8/8/r3K3/R7 w - - 99 80");
+        n = gen.genLegal(b, true, buf, 0, false);
+        int capture = 0;
+        for (int i = 0; i < n; i++)
+            if (Move.captured(buf[i]) != 0)
+                capture = buf[i];
+        b.makeMove(capture, true);
+        expect("capture resets the fifty-move clock", capture != 0 && b.halfmoveClock == 0, "clock " + b.halfmoveClock);
+        b.undoMove(true);
+        expect("undo restores the clock", b.halfmoveClock == 99, "clock " + b.halfmoveClock);
+
+        // The search treats the fifty-move limit as a draw even when it is totally winning.
+        Search search = new Search();
+        Board winning = Board.fromFEN("8/8/8/4k3/8/8/4K3/R7 w - - 99 80");
+        quiet(() -> search.getBestMove(winning, 4, true));
+        expect("search scores the move that hits 100 plies as a draw", search.lastEval().equals("0"), search.lastEval());
+        Board normal = Board.fromFEN("8/8/8/4k3/8/8/4K3/R7 w - - 0 80");
+        quiet(() -> search.getBestMove(normal, 4, true));
+        expect("same position with a fresh clock is winning", Integer.parseInt(search.lastEval()) > 300, search.lastEval());
+
+        // Promotion: no letter means queen, a letter picks the piece.
+        String setup = "a2a4 b7b5 a4b5 a7a6 b5a6 c8b7 a6b7 b8c6";
+        r = respond("PVP|" + setup + " b7b8n|WHITE");
+        expect("underpromotion to a knight", r[0].startsWith("rN"), r[0]);
+        r = respond("PVP|" + setup + " b7b8|WHITE");
+        expect("promotion without a letter is a queen", r[0].startsWith("rQ"), r[0]);
+        r = respond("PVP|" + setup + "|WHITE");
+        expect("promotion moves are listed with their letters",
+                r[2].contains("b7b8q") && r[2].contains("b7b8n") && r[2].contains("b7a8r"), r[2]);
+
+        // Protocol
+        r = respond("CPU||BLACK");
+        expect("engine opens when the human plays Black",
+                r.length == 7 && r[1].length() == 4 && r[3].equals("Black") && !r[4].isEmpty() && !r[6].isEmpty(),
+                String.join("|", r));
+        r = respond("CPU|e2e4|WHITE");
+        expect("engine answers e2e4", r.length == 7 && !r[1].isEmpty() && r[3].equals("White") && !r[4].isEmpty()
+                && r[5].equals("ONGOING") && !r[6].isEmpty(), String.join("|", r));
+        r = respond("EVAL|e2e4|WHITE");
+        expect("analysis returns a score and no move", r[1].isEmpty() && !r[4].isEmpty() && r[3].equals("Black"),
+                String.join("|", r));
+        r = respond("PVP|e2e4|WHITE");
+        expect("PvP mode never moves for anyone", r[1].isEmpty() && r[4].isEmpty() && r[6].isEmpty(), String.join("|", r));
+        r = respond("CPU|f2f3 e7e5 g2g4 d8h4|WHITE");
+        expect("no engine move after the game is over", r[1].isEmpty() && r[5].equals("CHECKMATE"), String.join("|", r));
+        expect("illegal move is rejected", respond("PVP|e2e5|WHITE")[0].equals("ERROR"), "");
+        expect("garbage move is rejected", respond("PVP|hello|WHITE")[0].equals("ERROR"), "");
+        expect("bad mode is rejected", respond("XYZ||WHITE")[0].equals("ERROR"), "");
+        expect("old single-move request is rejected", respond("CPU|RESET|WHITE")[0].equals("ERROR"), "");
+        r = respond("PVP|e2e4 e7e5|WHITE");
+        expect("full FEN carries turn, castling and move number",
+                r[0].equals("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"), r[0]);
+
+        System.out.println(ruleFailures == 0 ? "RULES PASSED" : "RULES FAILED (" + ruleFailures + ")");
+        return ruleFailures == 0;
     }
 
     // ----------------------------------------------------------------- search

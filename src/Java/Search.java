@@ -46,6 +46,10 @@ public class Search {
     /** Positions visited by the most recent search (read by the benchmark). */
     public long nodes;
 
+    // Score of the most recent search, from the point of view of the side that was searched
+    private int lastScore;
+    private boolean lastRootWhite = true;
+
     private boolean timed;
     private boolean canStop;
     private boolean stop;
@@ -102,10 +106,13 @@ public class Search {
         for (int i = 0; i < history.length; i++)
             history[i] >>= 1;
 
+        lastRootWhite = white;
+        lastScore = 0;
         int count = generator.genLegal(board, white, moves[0], 0, false);
         if (count == 0)
             return null;
         if (count == 1) {
+            lastScore = evaluate(board, white);
             System.out.println("Evaluation: forced move");
             return Move.fromInt(moves[0][0]);
         }
@@ -136,8 +143,22 @@ public class Search {
         if (stop)
             best = rootBest;
 
+        lastScore = bestScore;
         System.out.println("Evaluation: " + formatScore(bestScore, white));
         return Move.fromInt(best);
+    }
+
+    /**
+     * Score of the most recent search from White's point of view, as text: centipawns such as
+     * "35" or "-120", or a forced mate such as "#3" (White mates in 3) or "#-2" (Black mates in 2).
+     */
+    public String lastEval() {
+        int whiteScore = lastRootWhite ? lastScore : -lastScore;
+        if (Math.abs(lastScore) >= MATE_BOUND) {
+            int moves = (MATE - Math.abs(lastScore) + 1) / 2;
+            return (whiteScore > 0 ? "#" : "#-") + moves;
+        }
+        return Integer.toString(whiteScore);
     }
 
     // ------------------------------------------------------------------
@@ -157,6 +178,10 @@ public class Search {
             return evaluate(b, white);
 
         boolean root = ply == 0;
+        // A position that already occurred in this game or line, or the fifty-move limit, is a draw.
+        if (!root && (b.halfmoveClock >= 100 || b.hasRepeated()))
+            return 0;
+
         boolean pv = beta - alpha > 1;
         boolean inCheck = generator.inCheck(b, white);
 

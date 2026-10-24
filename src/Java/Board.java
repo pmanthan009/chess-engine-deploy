@@ -36,6 +36,9 @@ public class Board {
     // available)
     public int enPassantTarget;
 
+    /** Plies since the last capture or pawn move (the fifty-move rule counter, a draw at 100). */
+    int halfmoveClock;
+
     /** Side to move as read by fromFEN (the Board itself does not track the turn). */
     public boolean fenWhiteToMove = true;
 
@@ -75,6 +78,7 @@ public class Board {
     private int[] stCastle = new int[256];
     private int[] stEp = new int[256];
     private long[] stHash = new long[256];
+    private int[] stHalf = new int[256];
     private int sp = 0;
 
     public Board() {
@@ -125,6 +129,7 @@ public class Board {
         stCastle[sp] = castleBits();
         stEp[sp] = enPassantTarget;
         stHash[sp] = hash;
+        stHalf[sp] = halfmoveClock;
         sp++;
 
         int from = m & 63;
@@ -221,6 +226,8 @@ public class Board {
             h ^= Z_CASTLE[before] ^ Z_CASTLE[castleBits()];
         }
 
+        halfmoveClock = (pt == Move.PAWN || cap != 0) ? 0 : halfmoveClock + 1;
+
         allPieces = whitePieces | blackPieces;
         hash = h;
     }
@@ -301,6 +308,7 @@ public class Board {
         blackCanCastleQueenside = (castle & 8) != 0;
         enPassantTarget = stEp[sp];
         hash = stHash[sp];
+        halfmoveClock = stHalf[sp];
     }
 
     /** Passes the turn without moving (used by null-move pruning). */
@@ -311,6 +319,7 @@ public class Board {
         stCastle[sp] = castleBits();
         stEp[sp] = enPassantTarget;
         stHash[sp] = hash;
+        stHalf[sp] = halfmoveClock;
         sp++;
 
         long h = hash ^ Z_SIDE;
@@ -319,10 +328,34 @@ public class Board {
             enPassantTarget = -1;
         }
         hash = h;
+        halfmoveClock = 0; // a passed turn is not a real position: never look for repetitions across it
     }
 
     public void undoNullMove() {
         undoMove(true);
+    }
+
+    /**
+     * How many times the current position has occurred in the moves made so far, counting the
+     * current one (1 means it is new). Only positions since the last capture or pawn move can
+     * repeat, so the search back stops there.
+     */
+    int repetitionCount() {
+        int count = 1;
+        for (int back = 2; back <= halfmoveClock && back <= sp; back += 2) {
+            if (stHash[sp - back] == hash)
+                count++;
+        }
+        return count;
+    }
+
+    /** True if the current position already occurred earlier (used by the search as a draw). */
+    boolean hasRepeated() {
+        for (int back = 2; back <= halfmoveClock && back <= sp; back += 2) {
+            if (stHash[sp - back] == hash)
+                return true;
+        }
+        return false;
     }
 
     private int castleBits() {
@@ -336,6 +369,7 @@ public class Board {
         stCastle = Arrays.copyOf(stCastle, size);
         stEp = Arrays.copyOf(stEp, size);
         stHash = Arrays.copyOf(stHash, size);
+        stHalf = Arrays.copyOf(stHalf, size);
     }
 
     /** Toggles the bitboard of one piece type for the given colour. */
@@ -471,7 +505,7 @@ public class Board {
 
     /**
      * Builds a Board from a FEN string (piece placement, side to move, castling, en passant).
-     * The half-move and full-move counters are ignored.
+     * The half-move clock is read; the full-move counter is ignored.
      */
     public static Board fromFEN(String fen) {
         Board b = new Board();
@@ -521,6 +555,14 @@ public class Board {
         }
 
         b.updateOccupancies();
+        b.halfmoveClock = 0;
+        if (parts.length > 4) {
+            try {
+                b.halfmoveClock = Math.max(0, Integer.parseInt(parts[4]));
+            } catch (NumberFormatException ignored) {
+                // keep 0
+            }
+        }
         b.resetHash(b.fenWhiteToMove);
         return b;
     }
@@ -529,6 +571,20 @@ public class Board {
      * Translates the current Bitboard state into a FEN string for the web frontend.
      */
     public String toFEN() {
+        return placementFEN() + " w KQkq - 0 1";
+    }
+
+    /** Complete FEN: side to move, castling rights, En Passant square and move counters. */
+    public String toFEN(boolean whiteToMove, int fullmoveNumber) {
+        String castling = (whiteCanCastleKingside ? "K" : "") + (whiteCanCastleQueenside ? "Q" : "")
+                + (blackCanCastleKingside ? "k" : "") + (blackCanCastleQueenside ? "q" : "");
+        String ep = enPassantTarget == -1 ? "-"
+                : "" + (char) ('a' + (enPassantTarget & 7)) + (char) ('1' + (enPassantTarget >> 3));
+        return placementFEN() + (whiteToMove ? " w " : " b ") + (castling.isEmpty() ? "-" : castling) + " " + ep
+                + " " + halfmoveClock + " " + fullmoveNumber;
+    }
+
+    private String placementFEN() {
         StringBuilder fen = new StringBuilder();
         String letters = ".PNBRQK..pnbrqk";
 
@@ -553,7 +609,6 @@ public class Board {
                 fen.append('/'); // New line for the next rank
         }
 
-        // Return the board state layout
-        return fen.toString() + " w KQkq - 0 1";
+        return fen.toString();
     }
 }

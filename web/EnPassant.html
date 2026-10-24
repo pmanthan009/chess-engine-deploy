@@ -5,6 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>En Passant</title>
+  <link rel="icon" href="Logo.png" type="image/png">
   <link
     href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;900&family=Cinzel+Decorative:wght@400;700&display=swap"
     rel="stylesheet">
@@ -446,6 +447,24 @@
     .back-btn::before {
       display: none;
     }
+
+    /* Touch devices have no pointer to follow: drop the custom cursor */
+    @media (hover: none),
+    (pointer: coarse) {
+      .cursor {
+        display: none;
+      }
+
+      body,
+      a,
+      .menu-btn {
+        cursor: auto;
+      }
+    }
+
+    body {
+      -webkit-tap-highlight-color: transparent;
+    }
   </style>
 </head>
 
@@ -551,6 +570,7 @@
   <script>
     // Cursor
     const cursor = document.getElementById('cursor');
+    window.addEventListener('touchstart', () => { cursor.style.display = 'none'; }, { once: true, passive: true });
     document.addEventListener('mousemove', e => {
       cursor.style.left = e.clientX + 'px';
       cursor.style.top = e.clientY + 'px';
@@ -720,6 +740,15 @@
       e.preventDefault();
       window.scrollTo({ top: 0, behavior: 'smooth' });
     });
+  </script>
+  <script>
+    // The game server runs on a free plan that sleeps when idle. Poke it now, while the player
+    // is choosing a mode, so it is already waking up by the time the board page needs it.
+    (function () {
+      var local = ['localhost', '127.0.0.1', '[::1]', ''].indexOf(window.location.hostname) !== -1;
+      var api = local ? 'http://localhost:8080' : 'https://chess-engine-api-1zm6.onrender.com';
+      try { fetch(api + '/', { mode: 'no-cors' }).catch(function () { }); } catch (e) { /* ignore */ }
+    })();
   </script>
 </body>
 

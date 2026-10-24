@@ -1,13 +1,20 @@
-import com.sun.net.httpserver.HttpServer;
-import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.io.InputStream;
 import java.net.InetSocketAddress;
-import java.util.List;
+import java.nio.charset.StandardCharsets;
 
+/**
+ * HTTP front for the engine. See GameService for the request and response format.
+ *
+ *   POST /api/move   play, analyse or replay a game (stateless: the request holds the whole game)
+ *   GET  /           health check, also used by the web page to wake the host up
+ */
 public class WebServer {
+
+    private static final int MAX_BODY_BYTES = 20_000;
 
     public static void main(String[] args) throws Exception {
         String portEnv = System.getenv("PORT");
@@ -15,169 +22,81 @@ public class WebServer {
 
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
         server.createContext("/api/move", new MoveHandler());
-        server.setExecutor(null);
+        server.createContext("/", new HealthHandler());
+        server.setExecutor(null); // requests are handled one at a time
         server.start();
         System.out.println("Chess Engine API running on port " + port);
     }
 
-    static class MoveHandler implements HttpHandler {
+    private static void addCorsHeaders(HttpExchange exchange) {
+        exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+    }
 
-        private static Board board = new Board();
-        private static MoveGen moveGen = new MoveGen();
-        private static boolean isWhiteTurn = true;
-        private static Search search = new Search();
-        // Thinking time per CPU move in milliseconds. The search goes as deep as this allows.
-        // Override with the ENGINE_TIME_MS environment variable.
-        private static final long ENGINE_TIME_MS = readEngineTimeMs();
-
-        private static long readEngineTimeMs() {
-            String env = System.getenv("ENGINE_TIME_MS");
-            if (env != null) {
-                try {
-                    return Math.max(50, Long.parseLong(env.trim()));
-                } catch (NumberFormatException ignored) {
-                    // fall through to the default
-                }
-            }
-            return 2000;
+    private static void send(HttpExchange exchange, int status, String text) throws IOException {
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
         }
+    }
 
+    static class HealthHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            // CORS Headers
-            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
-            exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
-            exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
-
-            if ("OPTIONS".equals(exchange.getRequestMethod())) {
+            addCorsHeaders(exchange);
+            String method = exchange.getRequestMethod();
+            if ("OPTIONS".equals(method)) {
                 exchange.sendResponseHeaders(204, -1);
-                return;
-            }
-
-            if ("POST".equals(exchange.getRequestMethod())) {
-                InputStream is = exchange.getRequestBody();
-                String requestBody = new String(is.readAllBytes());
-
-                // Payload: "MODE|MOVE|HUMAN_COLOR" (e.g. "CPU|e2e4|WHITE" or "CPU|RESET|BLACK")
-                String[] parts = requestBody.split("\\|");
-                String mode = parts[0];
-                String moveStr = parts[1];
-                String humanColor = parts[2];
-
-                String responseText = "";
-
-                if ("RESET".equals(moveStr)) {
-                    board = new Board(); // Reset board state
-                    search.clear(); // Forget the previous game
-                    isWhiteTurn = true;
-
-                    String cpuMovePlayedStr = "";
-
-                    // If playing as BLACK against CPU, CPU (White) plays move #1 immediately!
-                    if ("CPU".equalsIgnoreCase(mode) && "BLACK".equalsIgnoreCase(humanColor)) {
-                        // Think for the configured time, searching as deep as it allows
-                        Move cpuMove = search.getBestMoveTimed(board, ENGINE_TIME_MS, isWhiteTurn);
-
-                        if (cpuMove != null) {
-                            board.makeMove(cpuMove, isWhiteTurn);
-                            cpuMovePlayedStr = formatSingleMove(cpuMove);
-                            isWhiteTurn = !isWhiteTurn; // Switch turn to Black (Human)
-                        }
-                    }
-
-                    List<Move> legalMoves = moveGen.getLegalMoves(board, isWhiteTurn);
-                    String legalStr = formatLegalMoves(legalMoves);
-                    String fen = board.toFEN();
-                    String turnStr = isWhiteTurn ? "White" : "Black";
-
-                    // Format: FEN | CpuMove | LegalMoves | ActiveTurn
-                    responseText = fen + "|" + cpuMovePlayedStr + "|" + legalStr + "|" + turnStr;
-
-                } else {
-                    // 1. Execute Human Move
-                    Move playedMove = parseMoveString(moveStr, moveGen.getLegalMoves(board, isWhiteTurn));
-                    if (playedMove != null) {
-                        board.makeMove(playedMove, isWhiteTurn);
-                        isWhiteTurn = !isWhiteTurn; // Switch turn to CPU
-                    }
-
-                    String cpuMovePlayedStr = "";
-
-                    // Execute CPU response move immediately
-                    if ("CPU".equalsIgnoreCase(mode)) {
-                        // Think for the configured time, searching as deep as it allows
-                        Move cpuMove = search.getBestMoveTimed(board, ENGINE_TIME_MS, isWhiteTurn);
-
-                        if (cpuMove != null) {
-                            board.makeMove(cpuMove, isWhiteTurn);
-                            cpuMovePlayedStr = formatSingleMove(cpuMove);
-                            isWhiteTurn = !isWhiteTurn; // Switch turn back to Human
-                        }
-                    }
-
-                    // 3. Return legal moves for next human turn
-                    List<Move> legalMoves = moveGen.getLegalMoves(board, isWhiteTurn);
-                    String legalStr = formatLegalMoves(legalMoves);
-                    String fen = board.toFEN();
-                    String turnStr = isWhiteTurn ? "White" : "Black";
-
-                    responseText = fen + "|" + cpuMovePlayedStr + "|" + legalStr + "|" + turnStr;
-                }
-
-                // Send Response
-                byte[] responseBytes = responseText.getBytes();
-                exchange.getResponseHeaders().set("Content-Type", "text/plain");
-                exchange.sendResponseHeaders(200, responseBytes.length);
-
-                OutputStream os = exchange.getResponseBody();
-                os.write(responseBytes);
-                os.close();
+            } else if ("GET".equals(method) || "HEAD".equals(method)) {
+                send(exchange, 200, "Chess engine API is running");
             } else {
                 exchange.sendResponseHeaders(405, -1);
             }
+            exchange.close();
         }
+    }
 
-        // --- HELPER METHODS ---
+    static class MoveHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            addCorsHeaders(exchange);
+            String method = exchange.getRequestMethod();
 
-        // Parses a 4-character move string like "e2e4" into a Move object
-        private static Move parseMoveString(String moveStr, List<Move> legalMoves) {
-            if (moveStr == null || moveStr.length() < 4)
-                return null;
-
-            int startSq = (moveStr.charAt(1) - '1') * 8 + (moveStr.charAt(0) - 'a');
-            int targetSq = (moveStr.charAt(3) - '1') * 8 + (moveStr.charAt(2) - 'a');
-
-            for (Move m : legalMoves) {
-                if (m.startSquare == startSq && m.targetSquare == targetSq) {
-                    return m;
-                }
+            if ("OPTIONS".equals(method)) {
+                exchange.sendResponseHeaders(204, -1);
+                exchange.close();
+                return;
             }
-            return new Move(startSq, targetSq);
-        }
-
-        // Converts list of Move objects to comma-separated algebraic strings
-        // ("e2e4,d2d4")
-        private static String formatLegalMoves(List<Move> moves) {
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < moves.size(); i++) {
-                Move m = moves.get(i);
-                sb.append((char) ('a' + (m.startSquare % 8)))
-                        .append((char) ('1' + (m.startSquare / 8)))
-                        .append((char) ('a' + (m.targetSquare % 8)))
-                        .append((char) ('1' + (m.targetSquare / 8)));
-                if (i < moves.size() - 1)
-                    sb.append(",");
+            if (!"POST".equals(method)) {
+                exchange.sendResponseHeaders(405, -1);
+                exchange.close();
+                return;
             }
-            return sb.toString();
+
+            String requestBody = new String(exchange.getRequestBody().readNBytes(MAX_BODY_BYTES), StandardCharsets.UTF_8);
+            long start = System.currentTimeMillis();
+            try {
+                String response = GameService.respond(requestBody);
+                System.out.println("request " + summarize(requestBody) + " -> "
+                        + (System.currentTimeMillis() - start) + " ms");
+                send(exchange, 200, response);
+            } catch (GameService.BadRequest e) {
+                send(exchange, 400, "ERROR|" + e.getMessage());
+            } catch (RuntimeException e) {
+                e.printStackTrace();
+                send(exchange, 500, "ERROR|internal error");
+            } finally {
+                exchange.close();
+            }
         }
 
-        private static String formatSingleMove(Move m) {
-            if (m == null)
-                return "";
-            return "" + (char) ('a' + (m.startSquare % 8))
-                    + (char) ('1' + (m.startSquare / 8))
-                    + (char) ('a' + (m.targetSquare % 8))
-                    + (char) ('1' + (m.targetSquare / 8));
+        private static String summarize(String body) {
+            String[] parts = body.trim().split("\\|", -1);
+            int plies = parts.length > 1 && !parts[1].trim().isEmpty() ? parts[1].trim().split("\\s+").length : 0;
+            return (parts.length > 0 ? parts[0] : "?") + " after " + plies + " plies";
         }
     }
 }

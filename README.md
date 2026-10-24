@@ -75,6 +75,13 @@ The engine currently supports pseudo-legal and strictly legal move generation fo
 ### 7. Full-Stack Web Interface
 * **Native HTTP Server:** Built a lightweight local server handling static file delivery and RESTful API requests.
 * **FEN Serialization:** Translates complex 64-bit board states into Forsyth-Edwards Notation strings to communicate seamlessly with the frontend.
+* **Stateless API:** Every request carries the whole game as a list of moves (`MODE|MOVES|COLOR`, for example `CPU|e2e4 e7e5|WHITE`), and the server replays it. Two visitors never share a board, and a game survives the host restarting or sleeping. Modes are `CPU`, `PVP` and `EVAL` (analysis only). The reply is `FEN|CPU_MOVE|LEGAL_MOVES|TURN|EVAL|STATUS|FEN_BEFORE_CPU`.
+* **Game rules:** Checkmate, stalemate, threefold repetition and the 50-move rule are detected on the server. The engine also treats repetitions and the 50-move limit as draws while searching, so it avoids them when ahead and aims for them when behind.
+* **Review:** Back and forward buttons (and the arrow keys, Home and End) step through the game, and any move in the move list can be clicked. The board is read-only while reviewing.
+* **Evaluation bar:** A switch shows or hides an engine evaluation bar next to the board (the choice is remembered). Positions the engine has not scored yet are analysed on demand.
+* **Resign and game over:** Resigning needs a second click to confirm. After checkmate or a resignation the losing king is tipped over on a red square and the winner's king is on green. Draws colour both kings a neutral grey with a ½ in the corner.
+* **Promotion picker:** Choose queen, rook, bishop or knight when a pawn reaches the last rank.
+* **Waking the free host:** Free hosting puts the API to sleep when idle, so the first request can take 30 to 60 seconds. The menu page starts waking it in the background, and the board page shows a warning banner and keeps retrying while it waits.
 * **Premium UI/UX:** Developed a responsive, dark-mode graphical interface using Vanilla JS, featuring optimistic UI rendering for zero-latency human piece movement, dynamic legal-move highlighting, and scrolling SVG backgrounds.
 
 ## Test Outputs (Backend):
@@ -108,6 +115,13 @@ Frontend Design:
 ### 2. Board Page:
 <img width="1919" height="903" alt="Screenshot 2026-03-17 232103" src="https://github.com/user-attachments/assets/07d2c73a-91a5-40fd-a96c-864546738651" />
 
+## Hosting
+
+* **Frontend (Vercel):** Import the repository in Vercel. `vercel.json` already tells it to publish the `web` folder with no build step, so the defaults work. The pages call the API at the address in `PROD_API` in `web/Board.html` and in the small script at the end of `web/EnPassant.html`. Change it in both places if the backend moves.
+* **Backend (Docker, for example on Render):** `src/Java/Dockerfile` builds and runs `WebServer`. Optional environment variables: `PORT`, `ENGINE_TIME_MS` (thinking time per move, default 2000) and `ANALYSIS_TIME_MS` (evaluation bar requests, default 400).
+* **Local development:** Run the server with `java -cp out WebServer` and serve the `web` folder with any static server. Pages opened from `localhost` talk to `http://localhost:8080` automatically (use `?api=http://localhost:PORT` for another port).
+* **Tests:** `java -cp out Bench rules` checks mate, stalemate, repetition, the 50-move rule, promotion and the API format.
+
 ## Next Steps
 * [x] Develop a static board evaluation function.
 * [x] Implement the pure Minimax algorithm.
@@ -116,3 +130,5 @@ Frontend Design:
 * [ ] Keep adding more heuristics.
 * [x] Implement Transposition Tables (Zobrist Hashing) to give the Engine positional memory.
 * [x] Iterative deepening, quiescence search and selective pruning to search deeper.
+* [x] Threefold repetition and 50-move draw rules.
+* [x] Back and forward through the game, evaluation bar and resign button.
