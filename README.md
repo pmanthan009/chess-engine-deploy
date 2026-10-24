@@ -10,7 +10,7 @@ A high-performance chess engine built from scratch in Java. This project bypasse
 * **Web Server:** Native Java `com.sun.net.httpserver`
 * **Frontend:** HTML5, CSS3 (Custom animations & SVGs), Vanilla JavaScript
 * **API Communication:** RESTful `POST` endpoints, Fetch API, FEN (Forsyth-Edwards Notation) strings
-* **Algorithms:** Minimax, Alpha-Beta Pruning, MVV-LVA Move Ordering
+* **Algorithms:** Negamax with Alpha-Beta Pruning, Iterative Deepening, Principal Variation Search, Transposition Table (Zobrist Hashing), Quiescence Search, Null-Move Pruning, Late Move Reductions, MVV-LVA / Killer / History Move Ordering
 * **Data Structures:** 64-bit Bitboards, Magic Bitboards, Piece-Square Tables (PSTs)
 
 ## Current Progress
@@ -46,7 +46,7 @@ The engine currently supports pseudo-legal and strictly legal move generation fo
 ### 4. Board State Management & Spatial Awareness
 * Implemented `makeMove()` and `undoMove()` functions to physically transition the board between states using extremely fast bitwise XOR (`^`) operations.
 * **Special Moves Execution:** Handles complex state changes like Castling (simultaneous King/Rook teleportation via XOR) and piece morphing without array corruption.
-* Engineered a memory-aware `Move` object that acts as a historical snapshot. It records captured piece IDs, castling rights, and En Passant targets, allowing the engine to perfectly reconstruct previous game states during deep search tree reversions.
+* **Allocation-free make/unmake:** Moves are packed into a single `int` (start/target square, moving and captured piece, promotion, and flags for En Passant, castling and double pushes). The board keeps an undo stack of castling rights, En Passant target and Zobrist hash, so the search never allocates objects. A mailbox array mirrors the bitboards for O(1) "which piece is on this square" lookups. The `Move` object is kept for the web server, console game and tests.
 * **Reverse Attack Detection:** Implemented an O(1) `isSquareAttacked()` function utilizing the pre-calculated attack tables to give the engine spatial awareness for Castling path validation and Check detection.
 
 ### 5. Static Evaluation (The AI's "Taste")
@@ -59,9 +59,18 @@ The engine currently supports pseudo-legal and strictly legal move generation fo
 * **Recursive Search Tree:** Implemented a Minimax algorithm to traverse future game states by recursively simulating and unmaking moves via the bitboard engine.
 * **Alpha-Beta Pruning:** Drastically optimized the search tree by implementing $\alpha$ and $\beta$ cutoffs. This mathematically reduces the time complexity from $O(b^d)$ to $O(b^{d/2})$, allowing the engine to sever useless branches and search twice as deep in the same amount of time.
 * **Strictly Legal Filter:** Engineered an on-the-fly move filter that physically tests pseudo-legal moves against the `isSquareAttacked` function to eliminate timelines where the King is left in check.
-* **Checkmate & Stalemate Detection:** The engine detects end-game states by evaluating empty legal move lists and returns depth-modified astronomical scores (+/- 99999) to force the fastest possible checkmate.
+* **Checkmate & Stalemate Detection:** The engine detects end-game states by evaluating empty legal move lists and returns mate scores that depend on the distance from the root (+/- 30000 minus the ply), so it always prefers the fastest checkmate.
 * **UCI-Style Output Formatting:** Translates raw centipawn evaluations into standard engine readouts (e.g., `+1.20`) and converts forced mate scores into clean `+M2` formatting.
 * **Interactive Playable Loop:** Developed a human vs. AI console interface that parses standard algebraic notation (`e2e4`) and validates human inputs against the strictly legal move generator.
+
+### 6b. Search Speed-Ups (Searching Deeper)
+* **Iterative Deepening + Time Control:** The search runs depth 1, 2, 3 and so on until the time budget (2 seconds per CPU move by default, `ENGINE_TIME_MS` to change it) is spent, and always has a best move ready from the last finished depth.
+* **Transposition Table:** An incrementally updated Zobrist hash identifies positions, so a position reached by a different move order is never searched twice, and the best move found earlier is tried first.
+* **Principal Variation Search, Null-Move Pruning, Late Move Reductions:** Spend the search effort on the most promising line and cut most of the rest early.
+* **Quiescence Search:** Keeps resolving captures past the depth limit, so the evaluation is never taken in the middle of an exchange. Evasions are searched when in check.
+* **Move Ordering:** Transposition table move, then promotions and captures (MVV-LVA), killer moves, and a history table for quiet moves. Every move is scored once.
+* **Cheaper Nodes:** Magic bitboard tables are built once and shared, with precomputed shifts and a flattened attack table. Move lists live in preallocated per-ply buffers.
+* **Benchmarking:** `java Bench perft` checks move generation against known node counts, `fast` and `verify` run the same through the int-move path (verify also checks the hash, mailbox and captures-only generation at every node), `search [depth]` and `time [ms]` report nodes, time and nodes per second, and `tactics` checks known mates.
 
 ### 7. Full-Stack Web Interface
 * **Native HTTP Server:** Built a lightweight local server handling static file delivery and RESTful API requests.
@@ -105,4 +114,5 @@ Frontend Design:
 * [x] Implement Alpha-Beta Pruning optimization.
 * [x] Teach openings.
 * [ ] Keep adding more heuristics.
-* [ ] Implement Transposition Tables (Zobrist Hashing) to give the Engine positional memory.
+* [x] Implement Transposition Tables (Zobrist Hashing) to give the Engine positional memory.
+* [x] Iterative deepening, quiescence search and selective pruning to search deeper.

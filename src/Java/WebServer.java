@@ -26,7 +26,21 @@ public class WebServer {
         private static MoveGen moveGen = new MoveGen();
         private static boolean isWhiteTurn = true;
         private static Search search = new Search();
-        private static final int ENGINE_DEPTH = 6;
+        // Thinking time per CPU move in milliseconds. The search goes as deep as this allows.
+        // Override with the ENGINE_TIME_MS environment variable.
+        private static final long ENGINE_TIME_MS = readEngineTimeMs();
+
+        private static long readEngineTimeMs() {
+            String env = System.getenv("ENGINE_TIME_MS");
+            if (env != null) {
+                try {
+                    return Math.max(50, Long.parseLong(env.trim()));
+                } catch (NumberFormatException ignored) {
+                    // fall through to the default
+                }
+            }
+            return 2000;
+        }
 
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -54,14 +68,15 @@ public class WebServer {
 
                 if ("RESET".equals(moveStr)) {
                     board = new Board(); // Reset board state
+                    search.clear(); // Forget the previous game
                     isWhiteTurn = true;
 
                     String cpuMovePlayedStr = "";
 
                     // If playing as BLACK against CPU, CPU (White) plays move #1 immediately!
                     if ("CPU".equalsIgnoreCase(mode) && "BLACK".equalsIgnoreCase(humanColor)) {
-                        // Call search algorithm with the configured depth!
-                        Move cpuMove = search.getBestMove(board, ENGINE_DEPTH, isWhiteTurn);
+                        // Think for the configured time, searching as deep as it allows
+                        Move cpuMove = search.getBestMoveTimed(board, ENGINE_TIME_MS, isWhiteTurn);
 
                         if (cpuMove != null) {
                             board.makeMove(cpuMove, isWhiteTurn);
@@ -90,8 +105,8 @@ public class WebServer {
 
                     // Execute CPU response move immediately
                     if ("CPU".equalsIgnoreCase(mode)) {
-                        // Call search algorithm with the configured depth!
-                        Move cpuMove = search.getBestMove(board, ENGINE_DEPTH, isWhiteTurn);
+                        // Think for the configured time, searching as deep as it allows
+                        Move cpuMove = search.getBestMoveTimed(board, ENGINE_TIME_MS, isWhiteTurn);
 
                         if (cpuMove != null) {
                             board.makeMove(cpuMove, isWhiteTurn);

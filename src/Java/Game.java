@@ -16,16 +16,15 @@ public class Game {
     /**
      * Play a game against your engine!
      * 
-     * @param aiDepth      How many moves ahead the AI should look (3 or 4 is
-     *                     recommended)
+     * @param thinkTimeMs  How long the AI may think per move, in milliseconds
      * @param humanIsWhite True if you want to play as White
      */
-    public void playHumanVsAI(int aiDepth, boolean humanIsWhite) {
+    public void playHumanVsAI(long thinkTimeMs, boolean humanIsWhite) {
         Scanner scanner = new Scanner(System.in);
         boolean isWhiteTurn = true;
         int moveNumber = 1;
 
-        System.out.println("--- STARTING HUMAN VS ENGINE (Engine Depth " + aiDepth + ") ---");
+        System.out.println("--- STARTING HUMAN VS ENGINE (" + thinkTimeMs + " ms per move) ---");
         System.out.println("Type your moves in standard format: 'e2e4', 'g1f3', etc.");
         if (humanIsWhite)
             System.out.println("You are playing White.");
@@ -33,7 +32,7 @@ public class Game {
             System.out.println("You are playing Black.");
 
         while (true) {
-            System.out.println("\nMove " + moveNumber + "(Depth:" + aiDepth + ")" + " - " + (isWhiteTurn ? "White" : "Black") + " to play:");
+            System.out.println("\nMove " + moveNumber + " - " + (isWhiteTurn ? "White" : "Black") + " to play:");
             printBoard(board);
 
             // 1. Generate Legal Moves & Check for Game Over
@@ -100,7 +99,7 @@ public class Game {
                 // --- AI TURN ---
                 System.out.println("Engine running...");
                 long startTime = System.currentTimeMillis();
-                Move bestMove = ai.getBestMove(board, aiDepth, isWhiteTurn);
+                Move bestMove = ai.getBestMoveTimed(board, thinkTimeMs, isWhiteTurn);
                 long endTime = System.currentTimeMillis();
 
                 if (bestMove == null) {
@@ -186,7 +185,7 @@ public class Game {
 
     public static void main(String[] args) {
         Game game = new Game();
-        // Play against the AI! Depth 4, and you are White (true).
-        game.playHumanVsAI(7, true);
+        // Play against the AI! It thinks for 3 seconds per move, and you are White (true).
+        game.playHumanVsAI(3000, true);
     }
 }
