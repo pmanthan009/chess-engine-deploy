@@ -13,7 +13,7 @@ import java.util.regex.Pattern;
  *          promotion carries the piece letter, such as "e7e8q" (no letter means queen)
  *   COLOR  WHITE or BLACK, the side the human plays against the engine (ignored outside CPU mode)
  *
- * Response body: FEN|CPU_MOVE|LEGAL_MOVES|TURN|EVAL|STATUS|FEN_BEFORE_CPU
+ * Response body: FEN|CPU_MOVE|LEGAL_MOVES|TURN|EVAL|STATUS|FEN_BEFORE_CPU|OPENING
  *   FEN             position after the engine has replied
  *   CPU_MOVE        the engine reply, or empty
  *   LEGAL_MOVES     comma separated legal moves for the side to move; empty once the game is over
@@ -22,6 +22,7 @@ import java.util.regex.Pattern;
  *                   empty when no search was run
  *   STATUS          ONGOING, CHECKMATE, STALEMATE, DRAW_REPETITION or DRAW_50
  *   FEN_BEFORE_CPU  position before the engine reply, empty if the engine did not move
+ *   OPENING         name of the opening the final position belongs to, empty if it is not in the book
  */
 final class GameService {
 
@@ -47,6 +48,8 @@ final class GameService {
 
     private static final MoveGen generator = new MoveGen();
     private static final Search search = new Search();
+    /** Opening book; tests may replace it with an empty one. */
+    static OpeningBook book = OpeningBook.fromEnvironment();
 
     static {
         search.setThreads(Search.defaultThreads()); // ENGINE_THREADS, else up to 4 cores
@@ -110,9 +113,12 @@ final class GameService {
         if (status.equals(ONGOING)) {
             if (mode.equals("CPU") && white != humanIsWhite) {
                 fenBeforeCpu = board.toFEN(white, 1 + plies / 2);
-                Move reply = search.getBestMoveTimed(board, ENGINE_TIME_MS, white);
-                eval = search.lastEval();
-                int m = board.encode(reply, white);
+                int m = book.probe(board, white, plies);
+                if (m == 0) {
+                    Move reply = search.getBestMoveTimed(board, ENGINE_TIME_MS, white);
+                    eval = search.lastEval();
+                    m = board.encode(reply, white);
+                }
                 board.makeMove(m, white);
                 cpuMove = Move.toUci(m);
                 white = !white;
@@ -135,7 +141,8 @@ final class GameService {
         }
 
         return board.toFEN(white, 1 + plies / 2) + "|" + cpuMove + "|" + legal + "|" + (white ? "White" : "Black")
-                + "|" + eval + "|" + status + "|" + fenBeforeCpu;
+                + "|" + eval + "|" + status + "|" + fenBeforeCpu
+                + "|" + (plies == 0 ? "" : book.nameOf(board, white));
     }
 
     /** Game state for the side to move, given how many legal moves it has. */

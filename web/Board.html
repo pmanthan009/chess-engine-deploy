@@ -1060,6 +1060,11 @@
         order: 2;
       }
 
+      .blk-opening {
+        grid-column: span 6;
+        order: 3;
+      }
+
       /* Row 2: resign, new game, flip */
       #btn-resign,
       #btn-new,
@@ -1193,6 +1198,11 @@
         <div class="panel-value" id="move-count">1</div>
       </div>
 
+      <div class="panel-block blk-opening">
+        <div class="panel-label">Opening</div>
+        <div class="panel-value" id="opening-name" style="font-size:0.8rem;letter-spacing:0.05em;color:var(--text);">Starting position</div>
+      </div>
+
       <div class="panel-block moves-block">
         <div class="panel-label">Moves</div>
         <div class="move-history" id="move-list"></div>
@@ -1318,6 +1328,7 @@
       moves: [],
       fens: [START_PLACEMENT],
       evals: [{ cp: 0 }],
+      openings: [''],   // opening name per position ('' = not in the book, null = not known)
       view: 0,
       legal: [],        // legal moves of the live position, e.g. "e2e4" or "e7e8q"
       turn: 'White',    // side to move in the live position
@@ -1363,7 +1374,7 @@
       return { cp: parseInt(text, 10) };
     }
 
-    // Reply: FEN | CPU_MOVE | LEGAL_MOVES | TURN | EVAL | STATUS | FEN_BEFORE_CPU
+    // Reply: FEN | CPU_MOVE | LEGAL_MOVES | TURN | EVAL | STATUS | FEN_BEFORE_CPU | OPENING
     function parseResponse(text) {
       const p = text.split('|');
       if (p.length < 6) throw new ApiError('The server sent a reply this page does not understand.', false);
@@ -1374,7 +1385,8 @@
         turn: p[3],
         eval: parseEval(p[4]),
         status: p[5],
-        fenBeforeCpu: p[6] || ''
+        fenBeforeCpu: p[6] || '',
+        opening: p[7] || ''
       };
     }
 
@@ -1612,6 +1624,24 @@
       }
 
       $('move-count').textContent = Math.floor(game.view / 2) + 1;
+
+      // Opening name; the position right after the human move is only named by the engine's reply
+      const opening = $('opening-name');
+      let name = game.openings[game.view];
+      if (name == null) name = game.openings[game.view + 1];
+      if (game.view === 0) {
+        opening.textContent = 'Starting position';
+        opening.style.color = 'var(--text-dim)';
+      } else if (name == null) {
+        opening.textContent = '…';
+        opening.style.color = 'var(--text-dim)';
+      } else if (name === '') {
+        opening.textContent = 'Not in our opening book';
+        opening.style.color = 'var(--text-dim)';
+      } else {
+        opening.textContent = name;
+        opening.style.color = 'var(--gold)';
+      }
 
       const status = $('game-status');
       if (!live) {
@@ -1875,11 +1905,13 @@
         game.moves.push(sent[sent.length - 1]);
         game.fens.push(r.cpuMove ? r.fenBeforeCpu : r.fen);
         game.evals.push(r.cpuMove ? r.eval : null);     // the engine scored the position it was asked about
+        game.openings.push(r.cpuMove ? null : r.opening);
       }
       if (r.cpuMove) {
         game.moves.push(r.cpuMove);
         game.fens.push(r.fen);
         game.evals.push(r.eval);
+        game.openings.push(r.opening);
       }
 
       game.legal = r.legal;
@@ -1953,7 +1985,7 @@
     async function startGame() {
       game.epoch++;
       Object.assign(game, {
-        moves: [], fens: [START_PLACEMENT], evals: [{ cp: 0 }], view: 0,
+        moves: [], fens: [START_PLACEMENT], evals: [{ cp: 0 }], openings: [''], view: 0,
         legal: [], turn: 'White', result: null, busy: true
       });
       disarmResign();

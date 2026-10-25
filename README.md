@@ -1,4 +1,4 @@
-# Java Bitboard Chess Engine
+﻿# Java Bitboard Chess Engine
 
 **Author:** Manthan Patel
 
@@ -74,7 +74,8 @@ The engine currently supports pseudo-legal and strictly legal move generation fo
 * **Incremental evaluation:** Material and piece-square scores are updated as moves are made, so evaluating a position only adds the pawn and rook terms.
 * **Selective pruning:** Reverse futility pruning, futility pruning and late move pruning skip hopeless moves near the leaves; aspiration windows and a check extension keep the main line sharp.
 * **Multi-threaded search (Lazy SMP):** Helper threads search the same position and share what they learn through a lock-free transposition table. Set `ENGINE_THREADS` (default: number of cores, at most 4).
-* **Measured, not guessed:** Every search change was kept only if it won (or did not lose) in engine-vs-engine matches against the previous version (`java Match`, 200–300 games each). Two tried ideas lost and were removed: log-based late move reductions and adaptive null-move reductions with internal iterative reductions; a 4-entry bucket transposition table also lost and was reverted.
+* **Opening book:** `src/Java/book.txt` lists well-known opening lines (one per row, coordinate moves). In CPU games the first moves are answered instantly from the book, chosen at random in proportion to how many lines use them, so the server spends no CPU on openings and games vary. The page shows the name of the opening being played, or "Not in our opening book" once the game leaves it. Add your own lines to the file (format `Opening name: moves`); illegal lines are reported at startup and skipped. Settings: `BOOK=off`, `BOOK_PATH`, `BOOK_MAX_PLIES` (default 20). Search, Bench and Match never use the book.
+* **Measured, not guessed:** Every search change was kept only if it won (or did not lose) in engine-vs-engine matches against the previous version (`java Match`, 200â€“300 games each). Two tried ideas lost and were removed: log-based late move reductions and adaptive null-move reductions with internal iterative reductions; a 4-entry bucket transposition table also lost and was reverted.
 * **Depth reached (desktop CPU, one thread, average over 6 test positions):** about 14 plies in 1 s, 15 in 2 s and 16 in 4 s, up from 13 / 14 / 15 before; simple endgames reach 20+. A free hosting plan has much less CPU, so it searches several plies less in the same time.
 * **Benchmarking:** `java Bench depth [ms] [threads]` reports depth, speed and branching factor; `java Bench perft` checks move generation against known node counts, `fast` and `verify` run the same through the int-move path (verify also checks the hash, mailbox and captures-only generation at every node), `search [depth]` and `time [ms]` report nodes, time and nodes per second, and `tactics` checks known mates.
 
@@ -85,7 +86,7 @@ The engine currently supports pseudo-legal and strictly legal move generation fo
 * **Game rules:** Checkmate, stalemate, threefold repetition and the 50-move rule are detected on the server. The engine also treats repetitions and the 50-move limit as draws while searching, so it avoids them when ahead and aims for them when behind.
 * **Review:** Back and forward buttons (and the arrow keys, Home and End) step through the game, and any move in the move list can be clicked. The board is read-only while reviewing.
 * **Evaluation bar:** A switch shows or hides an engine evaluation bar next to the board (the choice is remembered). Positions the engine has not scored yet are analysed on demand.
-* **Resign and game over:** Resigning needs a second click to confirm. After checkmate or a resignation the losing king is tipped over on a red square and the winner's king is on green. Draws colour both kings a neutral grey with a ½ in the corner.
+* **Resign and game over:** Resigning needs a second click to confirm. After checkmate or a resignation the losing king is tipped over on a red square and the winner's king is on green. Draws colour both kings a neutral grey with a Â½ in the corner.
 * **Promotion picker:** Choose queen, rook, bishop or knight when a pawn reaches the last rank.
 * **Waking the free host:** Free hosting puts the API to sleep when idle, so the first request can take 30 to 60 seconds. The menu page starts waking it in the background, and the board page shows a warning banner and keeps retrying while it waits.
 * **Premium UI/UX:** Developed a responsive, dark-mode graphical interface using Vanilla JS, featuring optimistic UI rendering for zero-latency human piece movement, dynamic legal-move highlighting, and scrolling SVG backgrounds.
@@ -124,7 +125,7 @@ Frontend Design:
 ## Hosting
 
 * **Frontend (Vercel):** Import the repository in Vercel. `vercel.json` already tells it to publish the `web` folder with no build step, so the defaults work. The pages call the API at the address in `PROD_API` in `web/Board.html` and in the small script at the end of `web/EnPassant.html`. Change it in both places if the backend moves.
-* **Backend (Docker, for example on Render):** `src/Java/Dockerfile` builds and runs `WebServer`. Optional environment variables: `PORT`, `ENGINE_TIME_MS` (thinking time per move, default 2000), `ANALYSIS_TIME_MS` (evaluation bar requests, default 400), `ENGINE_THREADS` (search threads, default the number of cores up to 4) and `TT_MB` (transposition table size, default 32).
+* **Backend (Docker, for example on Render):** `src/Java/Dockerfile` builds and runs `WebServer`. Optional environment variables: `PORT`, `ENGINE_TIME_MS` (thinking time per move, default 2000), `ANALYSIS_TIME_MS` (evaluation bar requests, default 400), `ENGINE_THREADS` (search threads, default the number of cores up to 4) and `TT_MB` (transposition table size, default 32), plus `BOOK`, `BOOK_PATH` and `BOOK_MAX_PLIES` for the opening book.
 * **Local development:** Run the server with `java -cp out WebServer` and serve the `web` folder with any static server. Pages opened from `localhost` talk to `http://localhost:8080` automatically (use `?api=http://localhost:PORT` for another port).
 * **Tests:** `java -cp out Bench rules` checks mate, stalemate, repetition, the 50-move rule, promotion and the API format. `java -cp out Bench verify` re-checks move generation, hashing and evaluation at every node of known perft trees.
 * **Strength testing:** `java -cp NEW Match <games> <ms> <baselineClasspath>` plays a new build against an older compiled copy and prints the result with an Elo estimate.

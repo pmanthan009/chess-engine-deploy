@@ -269,7 +269,7 @@ public class Bench {
         String shuffle = "g1f3 g8f6 f3g1 f6g8";
 
         String[] r = respond("PVP|" + shuffle + "|WHITE");
-        expect("one cycle of knight shuffling is not a draw", r.length == 7 && r[5].equals("ONGOING"), String.join("|", r));
+        expect("one cycle of knight shuffling is not a draw", r.length == 8 && r[5].equals("ONGOING"), String.join("|", r));
         r = respond("PVP|" + shuffle + " g1f3 g8f6 f3g1|WHITE");
         expect("second occurrence is not yet a draw", r[5].equals("ONGOING"), String.join("|", r));
         r = respond("PVP|" + shuffle + " " + shuffle + "|WHITE");
@@ -327,13 +327,15 @@ public class Bench {
         expect("promotion moves are listed with their letters",
                 r[2].contains("b7b8q") && r[2].contains("b7b8n") && r[2].contains("b7a8r"), r[2]);
 
-        // Protocol
+        // Protocol (with the opening book switched off so the engine really searches)
+        OpeningBook realBook = GameService.book;
+        GameService.book = new OpeningBook(0);
         r = respond("CPU||BLACK");
         expect("engine opens when the human plays Black",
-                r.length == 7 && r[1].length() == 4 && r[3].equals("Black") && !r[4].isEmpty() && !r[6].isEmpty(),
+                r.length == 8 && r[1].length() == 4 && r[3].equals("Black") && !r[4].isEmpty() && !r[6].isEmpty(),
                 String.join("|", r));
         r = respond("CPU|e2e4|WHITE");
-        expect("engine answers e2e4", r.length == 7 && !r[1].isEmpty() && r[3].equals("White") && !r[4].isEmpty()
+        expect("engine answers e2e4", r.length == 8 && !r[1].isEmpty() && r[3].equals("White") && !r[4].isEmpty()
                 && r[5].equals("ONGOING") && !r[6].isEmpty(), String.join("|", r));
         r = respond("EVAL|e2e4|WHITE");
         expect("analysis returns a score and no move", r[1].isEmpty() && !r[4].isEmpty() && r[3].equals("Black"),
@@ -349,6 +351,64 @@ public class Bench {
         r = respond("PVP|e2e4 e7e5|WHITE");
         expect("full FEN carries turn, castling and move number",
                 r[0].equals("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"), r[0]);
+
+        GameService.book = realBook;
+
+        // Opening book
+        expect("book file loaded", realBook.lineCount() > 20, "lines: " + realBook.lineCount());
+        long start = System.nanoTime();
+        r = respond("CPU||BLACK");
+        expect("book opens instantly as White", r[1].length() == 4 && r[4].isEmpty() && System.nanoTime() - start < 500_000_000L,
+                String.join("|", r));
+        r = respond("CPU|e2e4|WHITE");
+        expect("book answers 1.e4 without searching", !r[1].isEmpty() && r[4].isEmpty() && r[5].equals("ONGOING"),
+                String.join("|", r));
+        r = respond("CPU|a2a3|WHITE");
+        expect("out-of-book position is searched", r[1].length() >= 4 && !r[4].isEmpty(), String.join("|", r));
+        r = respond("CPU|e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 d7d6 c2c3 e8g8 h2h3 c8b7 d2d4 f8e8 b1d2 e7f8|BLACK");
+        expect("past the book depth the engine searches", r[1].length() >= 4 && !r[4].isEmpty(), String.join("|", r));
+        r = respond("PVP|e2e4|WHITE");
+        expect("1.e4 is named", r.length == 8 && r[7].equals("King's Pawn Opening"), String.join("|", r));
+        r = respond("PVP|e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6|WHITE");
+        expect("Najdorf is named", r[7].contains("Najdorf"), String.join("|", r));
+        r = respond("PVP|a2a3|WHITE");
+        expect("1.a3 is not in the book", r[7].isEmpty(), String.join("|", r));
+        r = respond("PVP|e2e4 e7e5 g1f3 b8c6 f1b5|WHITE");
+        expect("Ruy Lopez is named", r[7].equals("Ruy Lopez"), String.join("|", r));
+        r = respond("PVP||WHITE");
+        expect("start position has no opening", r[7].isEmpty(), String.join("|", r));
+
+        // random walks through the book: every move it offers must be legal
+        MoveGen walkGen = new MoveGen();
+        java.util.Random rnd = new java.util.Random(7);
+        int[] walkMoves = new int[256];
+        int bookHits = 0;
+        boolean allLegal = true;
+        for (int g = 0; g < 500; g++) {
+            Board wb = new Board();
+            boolean w = true;
+            for (int ply = 0; ply < 24; ply++) {
+                int bm = realBook.probe(wb, w, ply);
+                if (bm == 0) {
+                    int cnt = walkGen.genLegal(wb, w, walkMoves, 0, false);
+                    if (cnt == 0)
+                        break;
+                    bm = walkMoves[rnd.nextInt(cnt)];
+                    if (ply % 2 == 0)
+                        break; // the book side has run out of book
+                } else {
+                    bookHits++;
+                    int cnt = walkGen.genLegal(wb, w, walkMoves, 0, false);
+                    boolean found = false;
+                    for (int k = 0; k < cnt; k++)
+                        found |= walkMoves[k] == bm;
+                    allLegal &= found;
+                }
+                wb.makeMove(bm, w);
+                w = !w;
+            }
+        }
+        expect("book moves are always legal (" + bookHits + " probes)", allLegal && bookHits > 500, "hits " + bookHits);
 
         System.out.println(ruleFailures == 0 ? "RULES PASSED" : "RULES FAILED (" + ruleFailures + ")");
         return ruleFailures == 0;
