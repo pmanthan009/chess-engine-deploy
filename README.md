@@ -10,7 +10,7 @@ A high-performance chess engine built from scratch in Java. This project bypasse
 * **Web Server:** Native Java `com.sun.net.httpserver`
 * **Frontend:** HTML5, CSS3 (Custom animations & SVGs), Vanilla JavaScript
 * **API Communication:** RESTful `POST` endpoints, Fetch API, FEN (Forsyth-Edwards Notation) strings
-* **Algorithms:** Negamax with Alpha-Beta Pruning, Iterative Deepening, Principal Variation Search, Transposition Table (Zobrist Hashing), Quiescence Search, Null-Move Pruning, Late Move Reductions, MVV-LVA / Killer / History Move Ordering
+* **Algorithms:** Negamax with Alpha-Beta Pruning, Iterative Deepening, Aspiration Windows, Principal Variation Search, Transposition Table (Zobrist Hashing), Quiescence Search, Null-Move Pruning, Reverse Futility / Futility / Late Move Pruning, Late Move Reductions, Check Extension, Lazy SMP (multi-threaded search), MVV-LVA / Killer / History Move Ordering
 * **Data Structures:** 64-bit Bitboards, Magic Bitboards, Piece-Square Tables (PSTs)
 
 ## Current Progress
@@ -70,7 +70,13 @@ The engine currently supports pseudo-legal and strictly legal move generation fo
 * **Quiescence Search:** Keeps resolving captures past the depth limit, so the evaluation is never taken in the middle of an exchange. Evasions are searched when in check.
 * **Move Ordering:** Transposition table move, then promotions and captures (MVV-LVA), killer moves, and a history table for quiet moves. Every move is scored once.
 * **Cheaper Nodes:** Magic bitboard tables are built once and shared, with precomputed shifts and a flattened attack table. Move lists live in preallocated per-ply buffers.
-* **Benchmarking:** `java Bench perft` checks move generation against known node counts, `fast` and `verify` run the same through the int-move path (verify also checks the hash, mailbox and captures-only generation at every node), `search [depth]` and `time [ms]` report nodes, time and nodes per second, and `tactics` checks known mates.
+* **Pseudo-legal, staged move generation:** The search tries the remembered best move first, then captures, and only generates quiet moves if nothing has cut the search off yet. Legality is checked only after a move is made, and only for moves that can actually be illegal (king moves, en passant, moves while in check, and pieces standing on a line with their king).
+* **Incremental evaluation:** Material and piece-square scores are updated as moves are made, so evaluating a position only adds the pawn and rook terms.
+* **Selective pruning:** Reverse futility pruning, futility pruning and late move pruning skip hopeless moves near the leaves; aspiration windows and a check extension keep the main line sharp.
+* **Multi-threaded search (Lazy SMP):** Helper threads search the same position and share what they learn through a lock-free transposition table. Set `ENGINE_THREADS` (default: number of cores, at most 4).
+* **Measured, not guessed:** Every search change was kept only if it won (or did not lose) in engine-vs-engine matches against the previous version (`java Match`, 200–300 games each). Two tried ideas lost and were removed: log-based late move reductions and adaptive null-move reductions with internal iterative reductions; a 4-entry bucket transposition table also lost and was reverted.
+* **Depth reached (desktop CPU, one thread, average over 6 test positions):** about 14 plies in 1 s, 15 in 2 s and 16 in 4 s, up from 13 / 14 / 15 before; simple endgames reach 20+. A free hosting plan has much less CPU, so it searches several plies less in the same time.
+* **Benchmarking:** `java Bench depth [ms] [threads]` reports depth, speed and branching factor; `java Bench perft` checks move generation against known node counts, `fast` and `verify` run the same through the int-move path (verify also checks the hash, mailbox and captures-only generation at every node), `search [depth]` and `time [ms]` report nodes, time and nodes per second, and `tactics` checks known mates.
 
 ### 7. Full-Stack Web Interface
 * **Native HTTP Server:** Built a lightweight local server handling static file delivery and RESTful API requests.
@@ -118,9 +124,10 @@ Frontend Design:
 ## Hosting
 
 * **Frontend (Vercel):** Import the repository in Vercel. `vercel.json` already tells it to publish the `web` folder with no build step, so the defaults work. The pages call the API at the address in `PROD_API` in `web/Board.html` and in the small script at the end of `web/EnPassant.html`. Change it in both places if the backend moves.
-* **Backend (Docker, for example on Render):** `src/Java/Dockerfile` builds and runs `WebServer`. Optional environment variables: `PORT`, `ENGINE_TIME_MS` (thinking time per move, default 2000) and `ANALYSIS_TIME_MS` (evaluation bar requests, default 400).
+* **Backend (Docker, for example on Render):** `src/Java/Dockerfile` builds and runs `WebServer`. Optional environment variables: `PORT`, `ENGINE_TIME_MS` (thinking time per move, default 2000), `ANALYSIS_TIME_MS` (evaluation bar requests, default 400), `ENGINE_THREADS` (search threads, default the number of cores up to 4) and `TT_MB` (transposition table size, default 32).
 * **Local development:** Run the server with `java -cp out WebServer` and serve the `web` folder with any static server. Pages opened from `localhost` talk to `http://localhost:8080` automatically (use `?api=http://localhost:PORT` for another port).
-* **Tests:** `java -cp out Bench rules` checks mate, stalemate, repetition, the 50-move rule, promotion and the API format.
+* **Tests:** `java -cp out Bench rules` checks mate, stalemate, repetition, the 50-move rule, promotion and the API format. `java -cp out Bench verify` re-checks move generation, hashing and evaluation at every node of known perft trees.
+* **Strength testing:** `java -cp NEW Match <games> <ms> <baselineClasspath>` plays a new build against an older compiled copy and prints the result with an Elo estimate.
 
 ## Next Steps
 * [x] Develop a static board evaluation function.

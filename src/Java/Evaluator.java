@@ -107,6 +107,35 @@ public class Evaluator {
     };
 
     /**
+     * Material plus piece-square value of one piece, indexed by the board mailbox code
+     * (piece type, plus 8 for Black) and square. Positive for White, negative for Black. The board
+     * keeps the sum of these up to date as moves are made (Board.psq), so the search does not have
+     * to recount material and piece-square tables at every node.
+     */
+    static final int[][] PSQ = new int[16][64];
+
+    static {
+        int[] values = { 0, PAWN_VALUE, KNIGHT_VALUE, BISHOP_VALUE, ROOK_VALUE, QUEEN_VALUE, 0 };
+        int[][] tables = { null, PAWN_PST, KNIGHT_PST, BISHOP_PST, null, null, KING_PST };
+        for (int type = 1; type <= 6; type++) {
+            for (int sq = 0; sq < 64; sq++) {
+                int white = values[type] + (tables[type] == null ? 0 : tables[type][sq]);
+                int black = values[type] + (tables[type] == null ? 0 : tables[type][sq ^ 56]);
+                PSQ[type][sq] = white;
+                PSQ[type | 8][sq] = -black;
+            }
+        }
+    }
+
+    /**
+     * The same score as evaluate(), but taking material and piece-square values from the
+     * incrementally updated Board.psq. Used by the search; evaluate() stays the reference.
+     */
+    public int evaluateFast(Board board) {
+        return board.psq + positionalTerms(board);
+    }
+
+    /**
      * Calculates the static evaluation of the board based purely on material difference.
      */
     public int evaluate(Board board) {
@@ -141,6 +170,14 @@ public class Evaluator {
         blackScore += Long.bitCount(board.blackQueens) * QUEEN_VALUE;
         blackScore += evaluatePositional(board.blackKing, KING_PST, false);
 
+
+        return whiteScore - blackScore + positionalTerms(board);
+    }
+
+    /** Bishop pair, rooks on open files and passed pawns (White minus Black). */
+    private int positionalTerms(Board board) {
+        int whiteScore = 0;
+        int blackScore = 0;
 
         // ==========================================
         // --- ADVANCED POSITIONAL HEURISTICS ---

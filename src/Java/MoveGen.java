@@ -46,6 +46,8 @@ public class MoveGen {
     private static final int[] ROOK_OFFSETS = new int[64];
     private static final int[] BISHOP_OFFSETS = new int[64];
     private static final long[] ROOK_TABLE;
+    // Everything a queen on each square would see on an empty board (used to spot possible pins)
+    private static final long[] QUEEN_RAYS = new long[64];
     private static final long[] BISHOP_TABLE;
 
     static {
@@ -68,6 +70,8 @@ public class MoveGen {
         ROOK_TABLE = new long[rookTotal];
         BISHOP_TABLE = new long[bishopTotal];
         initMagicBitboards();
+        for (int square = 0; square < 64; square++)
+            QUEEN_RAYS[square] = rookAttacks(square, 0L) | bishopAttacks(square, 0L);
     }
 
     public MoveGen() {
@@ -92,10 +96,85 @@ public class MoveGen {
     // Int-based generation
     // ------------------------------------------------------------------
 
+    /**
+     * Generation modes: every move; only the "noisy" moves (captures and queen promotions, which
+     * is what quiescence search plays); or only the rest (quiet moves, castling, under-promotions).
+     * NOISY and QUIET together give exactly ALL.
+     */
+    public static final int ALL = 0;
+    public static final int NOISY = 1;
+    public static final int QUIET = 2;
+
+    private final int[] scratch = new int[64];
+
     /** Is the given side's king attacked? (False if that side has no king.) */
     public boolean inCheck(Board b, boolean white) {
         long king = white ? b.whiteKing : b.blackKing;
         return king != 0 && isSquareAttacked(Long.numberOfTrailingZeros(king), !white, b);
+    }
+
+    /**
+     * Called right after move m by the given side has been made: does it check the opponent?
+     * Only two things can give check: the moved piece itself, or a slider of ours whose line to the
+     * enemy king was opened by vacating the start square. That is much cheaper than a full attack
+     * scan; castling and en passant (which move two pieces) fall back to the full scan.
+     */
+    public boolean givesCheck(Board b, boolean white, int m) {
+        long enemyKing = white ? b.blackKing : b.whiteKing;
+        if (enemyKing == 0)
+            return false;
+        if ((m & (Move.EN_PASSANT | Move.CASTLE)) != 0)
+            return inCheck(b, !white);
+
+        int king = Long.numberOfTrailingZeros(enemyKing);
+        int to = Move.to(m);
+        int piece = Move.promotion(m) != 0 ? Move.promotion(m) : Move.piece(m);
+        long occupancy = b.allPieces;
+        long toBit = 1L << to;
+
+        // Direct check by the piece now standing on the target square
+        switch (piece) {
+            case Move.PAWN: {
+                long attacks = white ? ((toBit & NOT_A_FILE) << 7) | ((toBit & NOT_H_FILE) << 9)
+                        : ((toBit & NOT_H_FILE) >>> 7) | ((toBit & NOT_A_FILE) >>> 9);
+                if ((attacks & enemyKing) != 0)
+                    return true;
+                break;
+            }
+            case Move.KNIGHT:
+                if ((KNIGHT_ATTACKS[to] & enemyKing) != 0)
+                    return true;
+                break;
+            case Move.BISHOP:
+                if ((bishopAttacks(to, occupancy) & enemyKing) != 0)
+                    return true;
+                break;
+            case Move.ROOK:
+                if ((rookAttacks(to, occupancy) & enemyKing) != 0)
+                    return true;
+                break;
+            case Move.QUEEN:
+                if (((rookAttacks(to, occupancy) | bishopAttacks(to, occupancy)) & enemyKing) != 0)
+                    return true;
+                break;
+            default:
+                break; // a king never checks directly
+        }
+
+        // Discovered check: only possible if the start square lies on a line from the enemy king
+        if ((QUEEN_RAYS[king] & (1L << Move.from(m))) != 0) {
+            long rooksQueens = white ? b.whiteRooks | b.whiteQueens : b.blackRooks | b.blackQueens;
+            long bishopsQueens = white ? b.whiteBishops | b.whiteQueens : b.blackBishops | b.blackQueens;
+            if ((rookAttacks(king, occupancy) & rooksQueens) != 0 || (bishopAttacks(king, occupancy) & bishopsQueens) != 0)
+                return true;
+        }
+        return false;
+    }
+
+    /** True for the moves that NOISY generation produces. */
+    public static boolean isNoisy(int m) {
+        int promotion = Move.promotion(m);
+        return promotion == Move.QUEEN || (promotion == 0 && Move.captured(m) != 0);
     }
 
     /**
@@ -104,7 +183,7 @@ public class MoveGen {
      * promotions are produced (for quiescence search).
      */
     public int genLegal(Board b, boolean white, int[] buf, int start, boolean capsOnly) {
-        int end = genPseudo(b, white, buf, start, capsOnly);
+        int end = genMoves(b, white, buf, start, capsOnly ? NOISY : ALL);
         int out = start;
         for (int i = start; i < end; i++) {
             int m = buf[i];
@@ -121,13 +200,81 @@ public class MoveGen {
 
     /** Pseudo-legal moves: may leave the mover's own king in check. */
     public int genPseudo(Board b, boolean white, int[] buf, int n, boolean capsOnly) {
-        n = genPawns(b, white, buf, n, capsOnly);
-        n = genKnights(b, white, buf, n, capsOnly);
-        n = genSliders(b, white, Move.BISHOP, buf, n, capsOnly);
-        n = genSliders(b, white, Move.ROOK, buf, n, capsOnly);
-        n = genSliders(b, white, Move.QUEEN, buf, n, capsOnly);
-        n = genKing(b, white, buf, n, capsOnly);
+        return genMoves(b, white, buf, n, capsOnly ? NOISY : ALL);
+    }
+
+    /** Pseudo-legal moves of the given mode (ALL, NOISY or QUIET). */
+    public int genMoves(Board b, boolean white, int[] buf, int n, int mode) {
+        n = genPawns(b, white, buf, n, mode, -1L);
+        n = genKnights(b, white, buf, n, mode);
+        n = genSliders(b, white, Move.BISHOP, buf, n, mode);
+        n = genSliders(b, white, Move.ROOK, buf, n, mode);
+        n = genSliders(b, white, Move.QUEEN, buf, n, mode);
+        n = genKing(b, white, buf, n, mode);
         return n;
+    }
+
+    /** Squares a non-pawn piece may move to in the given mode. */
+    private static long targetsFor(Board b, boolean white, int mode) {
+        if (mode == NOISY)
+            return white ? b.blackPieces : b.whitePieces;
+        if (mode == QUIET)
+            return ~b.allPieces;
+        return ~(white ? b.whitePieces : b.blackPieces);
+    }
+
+    /**
+     * Can this move (remembered from another position, such as a table move or a killer) be
+     * played here? True if it is one of the pseudo-legal moves of the piece on its start square.
+     */
+    public boolean isPseudoLegal(Board b, boolean white, int m) {
+        if (m == 0)
+            return false;
+        int from = Move.from(m);
+        int pieceType = Move.piece(m);
+        if (b.pieceAt[from] != (white ? pieceType : (pieceType | 8)))
+            return false;
+
+        long valid = targetsFor(b, white, ALL);
+        long occupancy = b.allPieces;
+        int n;
+        switch (pieceType) {
+            case Move.PAWN:
+                n = genPawns(b, white, scratch, 0, ALL, 1L << from);
+                break;
+            case Move.KNIGHT:
+                n = emit(b, KNIGHT_ATTACKS[from] & valid, from, pieceType, scratch, 0);
+                break;
+            case Move.BISHOP:
+                n = emit(b, bishopAttacks(from, occupancy) & valid, from, pieceType, scratch, 0);
+                break;
+            case Move.ROOK:
+                n = emit(b, rookAttacks(from, occupancy) & valid, from, pieceType, scratch, 0);
+                break;
+            case Move.QUEEN:
+                n = emit(b, (rookAttacks(from, occupancy) | bishopAttacks(from, occupancy)) & valid, from, pieceType,
+                        scratch, 0);
+                break;
+            default:
+                n = genKing(b, white, scratch, 0, ALL);
+                break;
+        }
+        for (int i = 0; i < n; i++)
+            if (scratch[i] == m)
+                return true;
+        return false;
+    }
+
+    /**
+     * After a pseudo-legal move, must the search check that the own king is not left in check?
+     * When not in check, only king moves, en passant, and moves of a piece that stands on a line
+     * with its own king (and so may be pinned) can be illegal. kingSquare is -1 if there is no king.
+     */
+    public static boolean needsLegalityCheck(int m, int kingSquare, boolean inCheck) {
+        if (kingSquare < 0)
+            return false;
+        return inCheck || Move.piece(m) == Move.KING || (m & Move.EN_PASSANT) != 0
+                || (QUEEN_RAYS[kingSquare] & (1L << Move.from(m))) != 0;
     }
 
     private static int emit(Board b, long targets, int from, int pieceType, int[] buf, int n) {
@@ -140,27 +287,29 @@ public class MoveGen {
         return n;
     }
 
-    private int genPawns(Board b, boolean white, int[] buf, int n, boolean capsOnly) {
+    /** Pawn moves of the given mode, for the pawns in the mask "only" (-1 for all pawns). */
+    private int genPawns(Board b, boolean white, int[] buf, int n, int mode, long only) {
         long empty = ~b.allPieces;
 
         if (white) {
-            long pawns = b.whitePawns;
+            long pawns = b.whitePawns & only;
             long enemy = b.blackPieces;
 
             long single = (pawns << 8) & empty;
-            if (capsOnly) {
-                n = pawnMoves(b, single & RANK_8, -8, false, false, buf, n, true);
+            if (mode == NOISY) {
+                n = pawnMoves(b, single & RANK_8, -8, false, false, buf, n, mode);
             } else {
-                n = pawnMoves(b, single, -8, false, false, buf, n, false);
+                n = pawnMoves(b, single, -8, false, false, buf, n, mode);
                 long doublePush = ((single & RANK_3) << 8) & empty;
-                n = pawnMoves(b, doublePush, -16, false, true, buf, n, false);
+                n = pawnMoves(b, doublePush, -16, false, true, buf, n, mode);
             }
-            n = pawnMoves(b, ((pawns & NOT_H_FILE) << 9) & enemy, -9, true, false, buf, n, capsOnly);
-            n = pawnMoves(b, ((pawns & NOT_A_FILE) << 7) & enemy, -7, true, false, buf, n, capsOnly);
+            long captureTargets = mode == QUIET ? enemy & RANK_8 : enemy; // quiet: only under-promotions
+            n = pawnMoves(b, ((pawns & NOT_H_FILE) << 9) & captureTargets, -9, true, false, buf, n, mode);
+            n = pawnMoves(b, ((pawns & NOT_A_FILE) << 7) & captureTargets, -7, true, false, buf, n, mode);
 
             // --- EN PASSANT (WHITE) ---
             int ep = b.enPassantTarget;
-            if (ep >= 40) {
+            if (mode != QUIET && ep >= 40) {
                 long epMask = 1L << ep;
                 int base = (Move.PAWN << 12) | (Move.PAWN << 15) | Move.EN_PASSANT | (ep << 6);
                 if ((((pawns & NOT_H_FILE) << 9) & epMask) != 0)
@@ -169,23 +318,24 @@ public class MoveGen {
                     buf[n++] = base | (ep - 7);
             }
         } else {
-            long pawns = b.blackPawns;
+            long pawns = b.blackPawns & only;
             long enemy = b.whitePieces;
 
             long single = (pawns >>> 8) & empty;
-            if (capsOnly) {
-                n = pawnMoves(b, single & RANK_1, 8, false, false, buf, n, true);
+            if (mode == NOISY) {
+                n = pawnMoves(b, single & RANK_1, 8, false, false, buf, n, mode);
             } else {
-                n = pawnMoves(b, single, 8, false, false, buf, n, false);
+                n = pawnMoves(b, single, 8, false, false, buf, n, mode);
                 long doublePush = ((single & RANK_6) >>> 8) & empty;
-                n = pawnMoves(b, doublePush, 16, false, true, buf, n, false);
+                n = pawnMoves(b, doublePush, 16, false, true, buf, n, mode);
             }
-            n = pawnMoves(b, ((pawns & NOT_A_FILE) >>> 9) & enemy, 9, true, false, buf, n, capsOnly);
-            n = pawnMoves(b, ((pawns & NOT_H_FILE) >>> 7) & enemy, 7, true, false, buf, n, capsOnly);
+            long captureTargets = mode == QUIET ? enemy & RANK_1 : enemy;
+            n = pawnMoves(b, ((pawns & NOT_A_FILE) >>> 9) & captureTargets, 9, true, false, buf, n, mode);
+            n = pawnMoves(b, ((pawns & NOT_H_FILE) >>> 7) & captureTargets, 7, true, false, buf, n, mode);
 
             // --- EN PASSANT (BLACK) ---
             int ep = b.enPassantTarget;
-            if (ep != -1 && ep < 24) {
+            if (mode != QUIET && ep != -1 && ep < 24) {
                 long epMask = 1L << ep;
                 int base = (Move.PAWN << 12) | (Move.PAWN << 15) | Move.EN_PASSANT | (ep << 6);
                 if ((((pawns & NOT_A_FILE) >>> 9) & epMask) != 0)
@@ -198,11 +348,12 @@ public class MoveGen {
     }
 
     /**
-     * Turns a bitboard of pawn target squares into moves, expanding promotions. The start
-     * square is the target square plus delta.
+     * Turns a bitboard of pawn target squares into moves of the given mode, expanding promotions
+     * (queen in NOISY, rook/bishop/knight in QUIET, all four in ALL). The start square is the
+     * target square plus delta.
      */
     private static int pawnMoves(Board b, long targets, int delta, boolean capture, boolean doublePush,
-            int[] buf, int n, boolean queenOnly) {
+            int[] buf, int n, int mode) {
         while (targets != 0) {
             int to = Long.numberOfTrailingZeros(targets);
             targets &= targets - 1;
@@ -210,24 +361,21 @@ public class MoveGen {
             if (capture)
                 base |= (b.pieceAt[to] & 7) << 15;
             if (to >= 56 || to <= 7) {
-                if (queenOnly) {
+                if (mode != QUIET)
                     buf[n++] = base | (Move.QUEEN << 18);
-                } else {
-                    for (int piece = Move.QUEEN; piece >= Move.KNIGHT; piece--)
+                if (mode != NOISY)
+                    for (int piece = Move.ROOK; piece >= Move.KNIGHT; piece--)
                         buf[n++] = base | (piece << 18);
-                }
-            } else {
+            } else if (mode == ALL || (mode == NOISY) == capture) {
                 buf[n++] = doublePush ? (base | Move.DOUBLE_PUSH) : base;
             }
         }
         return n;
     }
 
-    private int genKnights(Board b, boolean white, int[] buf, int n, boolean capsOnly) {
+    private int genKnights(Board b, boolean white, int[] buf, int n, int mode) {
         long knights = white ? b.whiteKnights : b.blackKnights;
-        long own = white ? b.whitePieces : b.blackPieces;
-        long enemy = white ? b.blackPieces : b.whitePieces;
-        long valid = capsOnly ? enemy : ~own;
+        long valid = targetsFor(b, white, mode);
 
         while (knights != 0) {
             int from = Long.numberOfTrailingZeros(knights);
@@ -237,7 +385,7 @@ public class MoveGen {
         return n;
     }
 
-    private int genSliders(Board b, boolean white, int pieceType, int[] buf, int n, boolean capsOnly) {
+    private int genSliders(Board b, boolean white, int pieceType, int[] buf, int n, int mode) {
         long pieces;
         if (pieceType == Move.BISHOP)
             pieces = white ? b.whiteBishops : b.blackBishops;
@@ -246,9 +394,7 @@ public class MoveGen {
         else
             pieces = white ? b.whiteQueens : b.blackQueens;
 
-        long own = white ? b.whitePieces : b.blackPieces;
-        long enemy = white ? b.blackPieces : b.whitePieces;
-        long valid = capsOnly ? enemy : ~own;
+        long valid = targetsFor(b, white, mode);
         long occupancy = b.allPieces;
 
         while (pieces != 0) {
@@ -266,18 +412,15 @@ public class MoveGen {
         return n;
     }
 
-    private int genKing(Board b, boolean white, int[] buf, int n, boolean capsOnly) {
+    private int genKing(Board b, boolean white, int[] buf, int n, int mode) {
         long kingBoard = white ? b.whiteKing : b.blackKing;
         if (kingBoard == 0)
             return n;
 
-        long own = white ? b.whitePieces : b.blackPieces;
-        long enemy = white ? b.blackPieces : b.whitePieces;
-        long valid = capsOnly ? enemy : ~own;
         int from = Long.numberOfTrailingZeros(kingBoard);
-        n = emit(b, KING_ATTACKS[from] & valid, from, Move.KING, buf, n);
+        n = emit(b, KING_ATTACKS[from] & targetsFor(b, white, mode), from, Move.KING, buf, n);
 
-        if (capsOnly)
+        if (mode == NOISY)
             return n;
 
         // --- CASTLING ---
@@ -358,62 +501,62 @@ public class MoveGen {
 
     public List<Move> generateWhitePawnMoves(Board board) {
         int[] buf = new int[128];
-        return toMoves(buf, genPawns(board, true, buf, 0, false));
+        return toMoves(buf, genPawns(board, true, buf, 0, ALL, -1L));
     }
 
     public List<Move> generateBlackPawnMoves(Board board) {
         int[] buf = new int[128];
-        return toMoves(buf, genPawns(board, false, buf, 0, false));
+        return toMoves(buf, genPawns(board, false, buf, 0, ALL, -1L));
     }
 
     public List<Move> generateWhiteKnightMoves(Board board) {
         int[] buf = new int[128];
-        return toMoves(buf, genKnights(board, true, buf, 0, false));
+        return toMoves(buf, genKnights(board, true, buf, 0, ALL));
     }
 
     public List<Move> generateBlackKnightMoves(Board board) {
         int[] buf = new int[128];
-        return toMoves(buf, genKnights(board, false, buf, 0, false));
+        return toMoves(buf, genKnights(board, false, buf, 0, ALL));
     }
 
     public List<Move> generateWhiteKingMoves(Board board) {
         int[] buf = new int[16];
-        return toMoves(buf, genKing(board, true, buf, 0, false));
+        return toMoves(buf, genKing(board, true, buf, 0, ALL));
     }
 
     public List<Move> generateBlackKingMoves(Board board) {
         int[] buf = new int[16];
-        return toMoves(buf, genKing(board, false, buf, 0, false));
+        return toMoves(buf, genKing(board, false, buf, 0, ALL));
     }
 
     public List<Move> generateWhiteRookMoves(Board board) {
         int[] buf = new int[256];
-        return toMoves(buf, genSliders(board, true, Move.ROOK, buf, 0, false));
+        return toMoves(buf, genSliders(board, true, Move.ROOK, buf, 0, ALL));
     }
 
     public List<Move> generateBlackRookMoves(Board board) {
         int[] buf = new int[256];
-        return toMoves(buf, genSliders(board, false, Move.ROOK, buf, 0, false));
+        return toMoves(buf, genSliders(board, false, Move.ROOK, buf, 0, ALL));
     }
 
     public List<Move> generateWhiteBishopMoves(Board board) {
         int[] buf = new int[256];
-        return toMoves(buf, genSliders(board, true, Move.BISHOP, buf, 0, false));
+        return toMoves(buf, genSliders(board, true, Move.BISHOP, buf, 0, ALL));
     }
 
     public List<Move> generateBlackBishopMoves(Board board) {
         int[] buf = new int[256];
-        return toMoves(buf, genSliders(board, false, Move.BISHOP, buf, 0, false));
+        return toMoves(buf, genSliders(board, false, Move.BISHOP, buf, 0, ALL));
     }
 
     public List<Move> generateWhiteQueenMoves(Board board) {
         int[] buf = new int[256];
-        return toMoves(buf, genSliders(board, true, Move.QUEEN, buf, 0, false));
+        return toMoves(buf, genSliders(board, true, Move.QUEEN, buf, 0, ALL));
     }
 
     public List<Move> generateBlackQueenMoves(Board board) {
         int[] buf = new int[256];
-        return toMoves(buf, genSliders(board, false, Move.QUEEN, buf, 0, false));
+        return toMoves(buf, genSliders(board, false, Move.QUEEN, buf, 0, ALL));
     }
 
     /** Gathers every pseudo-legal move for White into one master list. */

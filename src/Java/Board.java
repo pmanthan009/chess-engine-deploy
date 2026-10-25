@@ -39,6 +39,9 @@ public class Board {
     /** Plies since the last capture or pawn move (the fifty-move rule counter, a draw at 100). */
     int halfmoveClock;
 
+    /** Material plus piece-square score, White minus Black, kept up to date by make/undo. */
+    int psq;
+
     /** Side to move as read by fromFEN (the Board itself does not track the turn). */
     public boolean fenWhiteToMove = true;
 
@@ -79,6 +82,7 @@ public class Board {
     private int[] stEp = new int[256];
     private long[] stHash = new long[256];
     private int[] stHalf = new int[256];
+    private int[] stPsq = new int[256];
     private int sp = 0;
 
     public Board() {
@@ -92,6 +96,42 @@ public class Board {
         // No En Passant target on turn 1
         enPassantTarget = -1;
         resetHash(true);
+    }
+
+    /** An independent copy of another board, including its move history (for search threads). */
+    public Board(Board other) {
+        whitePawns = other.whitePawns;
+        whiteKnights = other.whiteKnights;
+        whiteBishops = other.whiteBishops;
+        whiteRooks = other.whiteRooks;
+        whiteQueens = other.whiteQueens;
+        whiteKing = other.whiteKing;
+        blackPawns = other.blackPawns;
+        blackKnights = other.blackKnights;
+        blackBishops = other.blackBishops;
+        blackRooks = other.blackRooks;
+        blackQueens = other.blackQueens;
+        blackKing = other.blackKing;
+        whitePieces = other.whitePieces;
+        blackPieces = other.blackPieces;
+        allPieces = other.allPieces;
+        System.arraycopy(other.pieceAt, 0, pieceAt, 0, 64);
+        hash = other.hash;
+        halfmoveClock = other.halfmoveClock;
+        psq = other.psq;
+        whiteCanCastleKingside = other.whiteCanCastleKingside;
+        whiteCanCastleQueenside = other.whiteCanCastleQueenside;
+        blackCanCastleKingside = other.blackCanCastleKingside;
+        blackCanCastleQueenside = other.blackCanCastleQueenside;
+        enPassantTarget = other.enPassantTarget;
+        fenWhiteToMove = other.fenWhiteToMove;
+        stMove = Arrays.copyOf(other.stMove, other.stMove.length);
+        stCastle = Arrays.copyOf(other.stCastle, other.stCastle.length);
+        stEp = Arrays.copyOf(other.stEp, other.stEp.length);
+        stHash = Arrays.copyOf(other.stHash, other.stHash.length);
+        stHalf = Arrays.copyOf(other.stHalf, other.stHalf.length);
+        stPsq = Arrays.copyOf(other.stPsq, other.stPsq.length);
+        sp = other.sp;
     }
 
     private void setupStandardPosition() {
@@ -130,6 +170,7 @@ public class Board {
         stEp[sp] = enPassantTarget;
         stHash[sp] = hash;
         stHalf[sp] = halfmoveClock;
+        stPsq[sp] = psq;
         sp++;
 
         int from = m & 63;
@@ -150,6 +191,7 @@ public class Board {
 
         // Lift the moving piece off its start square
         xorPiece(white, pt, fromBB);
+        psq -= Evaluator.PSQ[pieceAt[from]][from];
         pieceAt[from] = 0;
         h ^= Z_PIECE[ownOffset + pt - 1][from];
 
@@ -158,6 +200,7 @@ public class Board {
             int capSq = ((m & Move.EN_PASSANT) != 0) ? (white ? to - 8 : to + 8) : to;
             long capBB = 1L << capSq;
             xorPiece(!white, cap, capBB);
+            psq -= Evaluator.PSQ[pieceAt[capSq]][capSq];
             pieceAt[capSq] = 0;
             h ^= Z_PIECE[(white ? 6 : 0) + cap - 1][capSq];
             if (white)
@@ -170,6 +213,7 @@ public class Board {
         int placed = promo != 0 ? promo : pt;
         xorPiece(white, placed, toBB);
         pieceAt[to] = white ? placed : (placed | 8);
+        psq += Evaluator.PSQ[pieceAt[to]][to];
         h ^= Z_PIECE[ownOffset + placed - 1][to];
         if (white)
             whitePieces ^= fromBB | toBB;
@@ -202,6 +246,7 @@ public class Board {
             }
             pieceAt[rookFrom] = 0;
             pieceAt[rookTo] = white ? Move.ROOK : (Move.ROOK | 8);
+            psq += Evaluator.PSQ[pieceAt[rookTo]][rookTo] - Evaluator.PSQ[pieceAt[rookTo]][rookFrom];
             h ^= Z_PIECE[ownOffset + Move.ROOK - 1][rookFrom] ^ Z_PIECE[ownOffset + Move.ROOK - 1][rookTo];
         }
 
@@ -309,6 +354,7 @@ public class Board {
         enPassantTarget = stEp[sp];
         hash = stHash[sp];
         halfmoveClock = stHalf[sp];
+        psq = stPsq[sp];
     }
 
     /** Passes the turn without moving (used by null-move pruning). */
@@ -320,6 +366,7 @@ public class Board {
         stEp[sp] = enPassantTarget;
         stHash[sp] = hash;
         stHalf[sp] = halfmoveClock;
+        stPsq[sp] = psq;
         sp++;
 
         long h = hash ^ Z_SIDE;
@@ -370,6 +417,7 @@ public class Board {
         stEp = Arrays.copyOf(stEp, size);
         stHash = Arrays.copyOf(stHash, size);
         stHalf = Arrays.copyOf(stHalf, size);
+        stPsq = Arrays.copyOf(stPsq, size);
     }
 
     /** Toggles the bitboard of one piece type for the given colour. */
@@ -472,6 +520,11 @@ public class Board {
         fillMailbox(blackQueens, 5 | 8);
         fillMailbox(blackKing, 6 | 8);
         sp = 0;
+
+        psq = 0;
+        for (int sq = 0; sq < 64; sq++)
+            if (pieceAt[sq] != 0)
+                psq += Evaluator.PSQ[pieceAt[sq]][sq];
     }
 
     private void fillMailbox(long bitboard, int code) {

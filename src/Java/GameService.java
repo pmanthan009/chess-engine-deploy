@@ -48,6 +48,10 @@ final class GameService {
     private static final MoveGen generator = new MoveGen();
     private static final Search search = new Search();
 
+    static {
+        search.setThreads(Search.defaultThreads()); // ENGINE_THREADS, else up to 4 cores
+    }
+
     private GameService() {
     }
 

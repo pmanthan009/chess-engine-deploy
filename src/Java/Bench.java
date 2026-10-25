@@ -11,6 +11,7 @@ import java.util.List;
  *   java Bench fast             perft through the allocation-free int move path (speed)
  *   java Bench verify           perft that also checks hash, mailbox and captures-only generation
  *   java Bench rules            game rules and the API: mate, stalemate, repetition, 50 moves, promotion
+ *   java Bench depth [millis] [threads]  depth, nodes per second and branching factor per position
  */
 public class Bench {
 
@@ -53,6 +54,8 @@ public class Bench {
             case "fast": System.exit(runPerftInt(false) ? 0 : 1); break;
             case "verify": System.exit(runPerftInt(true) ? 0 : 1); break;
             case "rules": System.exit(runRules() ? 0 : 1); break;
+            case "depth": runDepth(args.length > 1 ? Long.parseLong(args[1]) : 1000,
+                    args.length > 2 ? Integer.parseInt(args[2]) : 1); break;
             case "tactics": System.exit(runTactics(args.length > 1 ? Integer.parseInt(args[1]) : 5) ? 0 : 1); break;
             default: System.out.println("Unknown mode: " + mode);
         }
@@ -106,6 +109,8 @@ public class Bench {
         for (int i = 0; i < n; i++) {
             int clockBefore = b.halfmoveClock;
             b.makeMove(buf[i], white);
+            if (verify && gen.givesCheck(b, white, buf[i]) != gen.inCheck(b, !white))
+                throw new IllegalStateException("givesCheck wrong for " + Move.toUci(buf[i]));
             if (verify) {
                 boolean irreversible = Move.piece(buf[i]) == Move.PAWN || Move.captured(buf[i]) != 0;
                 if (b.halfmoveClock != (irreversible ? 0 : clockBefore + 1))
@@ -157,6 +162,8 @@ public class Bench {
     static void verifyNode(MoveGen gen, Board b, boolean white, int[] legal, int legalCount, int[] scratch) {
         if (b.computeHash(white) != b.hash)
             throw new IllegalStateException("incremental hash differs from recomputed hash");
+        if (VERIFY_EVAL.evaluateFast(b) != VERIFY_EVAL.evaluate(b))
+            throw new IllegalStateException("incremental evaluation differs from full evaluation");
 
         long wp = b.whitePawns | b.whiteKnights | b.whiteBishops | b.whiteRooks | b.whiteQueens | b.whiteKing;
         long bp = b.blackPawns | b.blackKnights | b.blackBishops | b.blackRooks | b.blackQueens | b.blackKing;
@@ -181,7 +188,41 @@ public class Bench {
         }
         if (expected != capCount)
             throw new IllegalStateException("captures-only list has " + capCount + " moves, expected " + expected);
+
+        // NOISY and QUIET generation must split ALL exactly, and isPseudoLegal must agree with ALL.
+        int[] all = new int[512], noisy = new int[512], quiet = new int[512];
+        int allCount = gen.genMoves(b, white, all, 0, MoveGen.ALL);
+        int noisyCount = gen.genMoves(b, white, noisy, 0, MoveGen.NOISY);
+        int quietCount = gen.genMoves(b, white, quiet, 0, MoveGen.QUIET);
+        int[] union = new int[noisyCount + quietCount];
+        System.arraycopy(noisy, 0, union, 0, noisyCount);
+        System.arraycopy(quiet, 0, union, noisyCount, quietCount);
+        int[] sortedAll = java.util.Arrays.copyOf(all, allCount);
+        java.util.Arrays.sort(sortedAll);
+        java.util.Arrays.sort(union);
+        if (!java.util.Arrays.equals(sortedAll, union))
+            throw new IllegalStateException("NOISY + QUIET generation differs from ALL");
+        for (int i = 0; i < noisyCount; i++)
+            if (!MoveGen.isNoisy(noisy[i]))
+                throw new IllegalStateException("NOISY produced a quiet move " + Move.toUci(noisy[i]));
+        for (int i = 0; i < quietCount; i++)
+            if (MoveGen.isNoisy(quiet[i]))
+                throw new IllegalStateException("QUIET produced a noisy move " + Move.toUci(quiet[i]));
+        for (int i = 0; i < allCount; i++) {
+            int m = all[i];
+            if (!gen.isPseudoLegal(b, white, m))
+                throw new IllegalStateException("isPseudoLegal rejects a real move " + Move.toUci(m));
+            // near-miss fakes: another target square, another captured piece, another flag
+            int[] fakes = { m ^ (1 << 6), m ^ (1 << 15), m ^ (1 << 16), m ^ Move.DOUBLE_PUSH, m ^ (1 << 12) };
+            for (int fake : fakes) {
+                boolean real = java.util.Arrays.binarySearch(sortedAll, fake) >= 0;
+                if (gen.isPseudoLegal(b, white, fake) != real)
+                    throw new IllegalStateException("isPseudoLegal wrong for " + Integer.toHexString(fake));
+            }
+        }
     }
+
+    static final Evaluator VERIFY_EVAL = new Evaluator();
 
     static boolean isCapsOnlyMove(int m) {
         int promo = Move.promotion(m);
@@ -311,6 +352,60 @@ public class Bench {
 
         System.out.println(ruleFailures == 0 ? "RULES PASSED" : "RULES FAILED (" + ruleFailures + ")");
         return ruleFailures == 0;
+    }
+
+    // ------------------------------------------------------------------ depth
+
+    /**
+     * Searches each position for the given time and reports the depth reached, the deepest ply
+     * (seldepth), the speed, and the effective branching factor: how many times more nodes each
+     * extra ply cost over the last few iterations (lower means deeper for the same time).
+     */
+    static void runDepth(long millis, int threads) {
+        Search warm = new Search();
+        for (String fen : SEARCH_POSITIONS) {
+            Board b = Board.fromFEN(fen);
+            quiet(() -> warm.getBestMoveTimed(b, Math.min(millis, 300), b.fenWhiteToMove));
+        }
+
+        double depthSum = 0, ebfSum = 0;
+        int ebfCount = 0;
+        long nodeSum = 0, msSum = 0;
+        System.out.printf("%-30s %6s %8s %12s %8s %6s  %s%n", "position", "depth", "seldepth", "nodes", "knps", "EBF", "best");
+        for (String fen : SEARCH_POSITIONS) {
+            Board b = Board.fromFEN(fen);
+            Search s = new Search();
+            s.setThreads(threads);
+            long t0 = System.nanoTime();
+            Move[] best = new Move[1];
+            quiet(() -> best[0] = s.getBestMoveTimed(b, millis, b.fenWhiteToMove));
+            long ms = Math.max(1, (System.nanoTime() - t0) / 1_000_000);
+
+            // EBF from the last (up to) three completed iterations
+            int d = s.completedDepth;
+            double ebf = 0;
+            int used = 0;
+            for (int k = d; k >= 3 && used < 3; k--, used++) {
+                long cur = s.iterationNodes[k] - s.iterationNodes[k - 1];
+                long prev = s.iterationNodes[k - 1] - s.iterationNodes[k - 2];
+                if (prev <= 0 || cur <= 0)
+                    break;
+                ebf += Math.log((double) cur / prev);
+            }
+            ebf = used > 0 ? Math.exp(ebf / used) : 0;
+            if (used > 0) {
+                ebfSum += ebf;
+                ebfCount++;
+            }
+            depthSum += d;
+            nodeSum += s.nodes;
+            msSum += ms;
+            System.out.printf(java.util.Locale.ROOT, "%-30s %6d %8d %,12d %8d %6.2f  %s%n", fen.substring(0, Math.min(30, fen.length())),
+                    d, s.selDepth, s.nodes, s.nodes / ms, ebf, name(best[0]));
+        }
+        System.out.printf(java.util.Locale.ROOT, "AVERAGE depth %.1f  EBF %.2f  speed %,d knps  (%d ms per position, %d thread%s)%n",
+                depthSum / SEARCH_POSITIONS.length, ebfCount > 0 ? ebfSum / ebfCount : 0, nodeSum / Math.max(1, msSum), millis,
+                threads, threads == 1 ? "" : "s");
     }
 
     // ----------------------------------------------------------------- search
