@@ -2,6 +2,8 @@
 
 **Author:** Manthan Patel
 
+**In production at:** https://chess-engine-deploy.vercel.app
+
 ## Overview
 A high-performance chess engine built from scratch in Java. This project bypasses traditional array-based board representations in favor of **Bitboards** (64-bit integer mapping) to achieve lightning-fast move generation and collision detection using raw bitwise operations. Regularly adding positional heuristics and advanced positional concepts to improve search for better moves.
 
